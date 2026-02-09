@@ -82,6 +82,12 @@ export class GameRenderer {
     private minimapLocalEntityId: EntityId | null = null;
     private networkWorldRoot: THREE.Group;
     private readonly overlaySuffix = '__Upper';
+    private readonly onResizeBound: () => void;
+    private readonly attachmentPos = new THREE.Vector3();
+    private readonly attachmentQuat = new THREE.Quaternion();
+    private readonly attachmentScale = new THREE.Vector3();
+    private readonly attachmentCorrectionQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, Math.PI, 0));
+    private lastMinimapRenderMs = 0;
 
     /** Entity meshes by entity ID */
     private entityVisuals: Map<number, EntityVisual> = new Map();
@@ -125,6 +131,7 @@ export class GameRenderer {
 
     constructor(config: RendererConfig) {
         this.container = config.container;
+        this.onResizeBound = this.onResize.bind(this);
 
         // Create renderer
         this.renderer = new THREE.WebGLRenderer({
@@ -171,7 +178,7 @@ export class GameRenderer {
         this.minimap = new Minimap(this.scene, this.container);
 
         // Handle resize
-        window.addEventListener('resize', () => this.onResize());
+        window.addEventListener('resize', this.onResizeBound);
     }
 
     /**
@@ -211,8 +218,8 @@ export class GameRenderer {
         sun.castShadow = true;
 
         // Optimize shadow map
-        sun.shadow.mapSize.width = 4096;
-        sun.shadow.mapSize.height = 4096;
+        sun.shadow.mapSize.width = 2048;
+        sun.shadow.mapSize.height = 2048;
         sun.shadow.camera.near = 1;
         sun.shadow.camera.far = 200;
         sun.shadow.camera.left = -100;
@@ -1044,28 +1051,12 @@ export class GameRenderer {
 
                 // Sync gunHolder to handBone world transform
                 if (handBone && gunHolder) {
-                    const params = {
-                        pos: new THREE.Vector3(),
-                        quat: new THREE.Quaternion(),
-                        scale: new THREE.Vector3()
-                    };
-
                     handBone.updateWorldMatrix(true, false);
-                    handBone.matrixWorld.decompose(params.pos, params.quat, params.scale);
+                    handBone.matrixWorld.decompose(this.attachmentPos, this.attachmentQuat, this.attachmentScale);
+                    this.attachmentQuat.multiply(this.attachmentCorrectionQuat);
 
-                    // CORRECTION: Rotate gun to point forward/downward
-                    // The gun model is likely oriented 'up' by default, so we need to rotate it.
-                    // 90 degrees on X-axis: Points the barrel down (flipped 180 from -90)
-                    // 180 degrees on Y-axis: Mirrors/flips the gun horizontally
-                    const correction = new THREE.Quaternion();
-                    const euler = new THREE.Euler(Math.PI / 2, Math.PI, 0); // 90 deg X, 180 deg Y
-                    correction.setFromEuler(euler);
-
-                    // Apply correction relative to the hand's rotation
-                    params.quat.multiply(correction);
-
-                    gunHolder.position.copy(params.pos);
-                    gunHolder.quaternion.copy(params.quat);
+                    gunHolder.position.copy(this.attachmentPos);
+                    gunHolder.quaternion.copy(this.attachmentQuat);
                     // We typically don't sync scale for weapons to avoid squashing, 
                     // or maybe we do if the character scales? keeping it simple for now.
                 }
@@ -1081,7 +1072,11 @@ export class GameRenderer {
         }
 
         this.renderer.render(this.scene, this.camera);
-        this.minimap.render();
+        const nowMs = performance.now();
+        if (nowMs - this.lastMinimapRenderMs >= 33) {
+            this.minimap.render();
+            this.lastMinimapRenderMs = nowMs;
+        }
     }
 
     private isMoveAnimation(name: string): boolean {
@@ -1244,7 +1239,7 @@ export class GameRenderer {
      */
     dispose(): void {
         // Remove resize listener
-        window.removeEventListener('resize', () => this.onResize());
+        window.removeEventListener('resize', this.onResizeBound);
 
         // Dispose geometries
         Object.values(this.geometries).forEach(g => g.dispose());

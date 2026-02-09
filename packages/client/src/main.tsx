@@ -331,12 +331,23 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     let lastTime = performance.now();
     let frameCount = 0;
     let fpsUpdateTime = lastTime;
-    const NETDBG = import.meta.env.DEV;
+    const NETDBG = import.meta.env.DEV && String(import.meta.env.VITE_NETDBG ?? '').toLowerCase() === 'true';
     let lastNetDbgMs = 0;
 
     // Simulated player position (would come from game state)
     const playerPosition = new THREE.Vector3(initialSpawn.x, initialSpawn.y, initialSpawn.z);
     let lastLocalServerPos = new THREE.Vector3(0, 0, 0);
+    const tmpLocalPos = new THREE.Vector3();
+    const tmpLocalVel = new THREE.Vector3();
+    const tmpVisualPos = new THREE.Vector3();
+    const tmpPushOffset = new THREE.Vector3();
+    const tmpCorrectionTarget = new THREE.Vector3();
+    const tmpCameraPos = new THREE.Vector3();
+    const tmpAimPoint = new THREE.Vector3();
+    const tmpShootDir = new THREE.Vector3();
+    const tmpHitNormal = new THREE.Vector3(0, 1, 0);
+    const tmpShotOrigin = new THREE.Vector3();
+    let lastUiAiming = false;
     const playerVelocity = { x: 0, y: 0, z: 0 };
 
     let lastShotTime = 0;
@@ -350,14 +361,16 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         requestAnimationFrame(animate);
 
         const now = performance.now();
-        if (!(window as any).__netdbg_last) (window as any).__netdbg_last = 0;
-        if (now - (window as any).__netdbg_last > 1000) {
-            (window as any).__netdbg_last = now;
-            const dbg = bridge.getDebugNetState?.();
-            if (dbg) {
-                console.log("[NETDBG]", dbg);
-            } else {
-                console.log("[NETDBG] bridge debug state missing");
+        if (NETDBG) {
+            if (!(window as any).__netdbg_last) (window as any).__netdbg_last = 0;
+            if (now - (window as any).__netdbg_last > 1000) {
+                (window as any).__netdbg_last = now;
+                const dbg = bridge.getDebugNetState?.();
+                if (dbg) {
+                    console.log("[NETDBG]", dbg);
+                } else {
+                    console.log("[NETDBG] bridge debug state missing");
+                }
             }
         }
         const deltaTime = Math.min((now - lastTime) / 1000, 0.05);
@@ -449,8 +462,8 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         if (!CLIENT_AUTHORITY && characterController) {
             const correction = bridge.getServerCorrectionTarget?.();
             if (correction) {
-                const localPos = characterController.getPosition();
-                const target = new THREE.Vector3(correction.x, correction.y, correction.z);
+                const localPos = characterController.copyPosition(tmpLocalPos);
+                const target = tmpCorrectionTarget.set(correction.x, correction.y, correction.z);
                 const delta = target.clone().sub(localPos);
                 const dist = delta.length();
                 if (dist > 0.01) {
@@ -514,8 +527,8 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
 
             // Client-side pushback vs remote players (disabled in client-authority mode).
             if (!CLIENT_AUTHORITY && interpolatedRemotes.size > 0) {
-                const localPos = characterController.getPosition();
-                const localVel = characterController.getVelocity();
+                const localPos = characterController.copyPosition(tmpLocalPos);
+                const localVel = characterController.copyVelocity(tmpLocalVel);
                 const playerRadius = 0.35;
                 const minDist = playerRadius * 2.0;
                 let pushX = 0;
@@ -536,7 +549,8 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 }
 
                 if (pushX !== 0 || pushZ !== 0) {
-                    characterController.applyPositionOffset(new THREE.Vector3(pushX, 0, pushZ));
+                    tmpPushOffset.set(pushX, 0, pushZ);
+                    characterController.applyPositionOffset(tmpPushOffset);
                     // Remove velocity into the push direction to avoid immediate re-penetration.
                     const pushLen = Math.sqrt(pushX * pushX + pushZ * pushZ);
                     if (pushLen > 1e-6) {
@@ -553,13 +567,13 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             }
 
             // Get position for camera
-            const pos = characterController.getPosition();
+            const pos = characterController.copyPosition(tmpLocalPos);
             playerPosition.x = pos.x;
             playerPosition.y = pos.y;
             playerPosition.z = pos.z;
 
             // Get velocity for animations
-            const vel = characterController.getVelocity();
+            const vel = characterController.copyVelocity(tmpLocalVel);
             playerVelocity.x = vel.x;
             playerVelocity.y = vel.y;
             playerVelocity.z = vel.z;
@@ -568,7 +582,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             movementState.velocity.isGrounded = characterController.isGrounded;
 
             // Sync visual mesh to controller position
-            const visualPos = characterController.getVisualPosition();
+            const visualPos = characterController.copyVisualPosition(tmpVisualPos);
             const playerQuat = new THREE.Quaternion();
             playerQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), characterController.modelEulerY + MODEL_FORWARD_YAW);
 
@@ -582,8 +596,8 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
 
             // Send BVH pose to server at 20Hz for validation
             if (now - lastPoseSentMs >= POSE_SEND_INTERVAL_MS && !liveState.isGameOver) {
-                const pos = characterController.getPosition();
-                const vel = characterController.getVelocity();
+                const pos = characterController.copyPosition(tmpLocalPos);
+                const vel = characterController.copyVelocity(tmpLocalVel);
                 client.sendPose({
                     position: { x: pos.x, y: pos.y, z: pos.z },
                     velocity: { x: vel.x, y: vel.y, z: vel.z },
@@ -751,10 +765,11 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
 
 
         // Update aim state in UI
-        bridge.updateState({
-            isAiming,
-            // localPlayerEntityId: localPlayerId // Already set in bridge
-        });// Shooting Logic
+        if (isAiming !== lastUiAiming) {
+            bridge.updateState({ isAiming });
+            lastUiAiming = isAiming;
+        }
+        // Shooting Logic
         // Fire if aiming + shooting held + cooldown ready
         const CURRENT_FIRE_RATE = SMG_STATS.fireRate * 1000;
         const stateNow = bridge.getState();
@@ -764,7 +779,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
 
         if (isShootingDown && !isReloading && !isReloadPressed && !isDead && !isGameOver && (now - lastShotTime > CURRENT_FIRE_RATE)) {
             const muzzle = renderer.getMuzzleTransform(LOCAL_VISUAL_ID);
-            const cameraPos = new THREE.Vector3();
+            const cameraPos = tmpCameraPos;
             renderer.mainCamera.getWorldPosition(cameraPos);
             const startPos = muzzle?.position ?? cameraPos;
             if (startPos) {
@@ -775,7 +790,8 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 raycaster.setFromCamera(new THREE.Vector2(0, 0), renderer.mainCamera);
                 raycaster.far = 1000;
 
-                let aimPoint = new THREE.Vector3();
+                const aimPoint = tmpAimPoint;
+                aimPoint.set(0, 0, 0);
                 let hasAimHit = false;
 
                 // Check Map Collision for Aiming
@@ -793,11 +809,11 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 }
 
                 // 2. Calculate shoot direction from nozzle to aim point
-                const shootDirection = new THREE.Vector3().subVectors(aimPoint, startPos).normalize();
+                const shootDirection = tmpShootDir.subVectors(aimPoint, startPos).normalize();
 
                 // 3. Perform actual shot raycast from nozzle
                 let hitPoint = startPos.clone().add(shootDirection.clone().multiplyScalar(100));
-                let hitNormal = new THREE.Vector3(0, 1, 0);
+                const hitNormal = tmpHitNormal.set(0, 1, 0);
                 let hasHit = false;
 
                 if (bvhCollider && bvhCollider.geometry.boundsTree) {
@@ -822,7 +838,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 // Send shot to server (authoritative damage)
                 const serverSelfPos = bridge.getServerSelfPos?.();
                 const shotOrigin = serverSelfPos
-                    ? new THREE.Vector3(serverSelfPos.x, serverSelfPos.y + 1.2, serverSelfPos.z)
+                    ? tmpShotOrigin.set(serverSelfPos.x, serverSelfPos.y + 1.2, serverSelfPos.z)
                     : startPos;
                 client.sendShoot({
                     shotId: `${now}-${Math.random()}`,

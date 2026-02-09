@@ -96,6 +96,8 @@ export class BVHCharacterController {
     // Temp vectors (reused to avoid GC)
     private tempVector = new THREE.Vector3();
     private tempVector2 = new THREE.Vector3();
+    private tempVector3 = new THREE.Vector3();
+    private tempVector4 = new THREE.Vector3();
     private tempBox = new THREE.Box3();
     private tempMat = new THREE.Matrix4();
     private tempSegment = new THREE.Line3();
@@ -162,10 +164,11 @@ export class BVHCharacterController {
         const aimSpeed = input.aim ? this.config.aimSpeed : 1;
         const moveSpeed = speed * aimSpeed;
 
-        const forward = new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw));
-        const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+        const forward = this.tempVector3.set(Math.sin(cameraYaw), 0, Math.cos(cameraYaw));
+        const right = this.tempVector4.set(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
 
-        const move = new THREE.Vector3();
+        const move = this.tempVector;
+        move.set(0, 0, 0);
         if (input.forward) move.add(forward);
         if (input.backward) move.sub(forward);
         if (input.right) move.add(right);
@@ -351,10 +354,11 @@ export class BVHCharacterController {
 
         // Apply input acceleration
         if (inputX !== 0 || inputZ !== 0) {
-            const forward = new THREE.Vector3(Math.sin(cameraYaw), 0, Math.cos(cameraYaw));
-            const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+            const forward = this.tempVector3.set(Math.sin(cameraYaw), 0, Math.cos(cameraYaw));
+            const right = this.tempVector4.set(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
 
-            const move = new THREE.Vector3();
+            const move = this.tempVector;
+            move.set(0, 0, 0);
             move.addScaledVector(forward, inputZ);
             move.addScaledVector(right, inputX);
             move.normalize().multiplyScalar(speed);
@@ -422,7 +426,8 @@ export class BVHCharacterController {
 
         // Calculate how much we moved
         const deltaVector = this.tempVector2;
-        deltaVector.subVectors(newPosition, this.position.clone().add(capsuleInfo.segment.start));
+        const playerCapsuleBase = this.tempVector3.copy(this.position).add(capsuleInfo.segment.start);
+        deltaVector.subVectors(newPosition, playerCapsuleBase);
 
         // OLD ground detection was here - removed
 
@@ -435,7 +440,7 @@ export class BVHCharacterController {
         // If we hit a wall, kill velocity into it
         if (offset > 0.0001) {
             // deltaVector is roughly the normal * penetration
-            const normal = deltaVector.clone().normalize();
+            const normal = this.tempVector4.copy(deltaVector).normalize();
             const dot = this.velocity.dot(normal);
             if (dot < 0) {
                 this.velocity.sub(normal.multiplyScalar(dot));
@@ -451,12 +456,24 @@ export class BVHCharacterController {
         return this.position.clone();
     }
 
+    copyPosition(out: THREE.Vector3): THREE.Vector3 {
+        return out.copy(this.position);
+    }
+
     getVisualPosition(): THREE.Vector3 {
         return this.position.clone();
     }
 
+    copyVisualPosition(out: THREE.Vector3): THREE.Vector3 {
+        return out.copy(this.position);
+    }
+
     getVelocity(): THREE.Vector3 {
         return this.velocity.clone();
+    }
+
+    copyVelocity(out: THREE.Vector3): THREE.Vector3 {
+        return out.copy(this.velocity);
     }
 
     get isGrounded(): boolean {

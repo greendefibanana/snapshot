@@ -44,7 +44,7 @@ interface ModeCardProps {
 
 const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
     const bridge = getGameBridge();
-    const isComingSoon = data.mode === '4v4';
+    const isComingSoon = data.mode !== 'training';
     const accent = data.accent ?? 'purple';
     const accentBorder = accent === 'green' ? 'rgba(34, 197, 94, 0.45)' : 'rgba(139, 92, 246, 0.3)';
     const accentBorderHover = accent === 'green' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(139, 92, 246, 0.8)';
@@ -131,7 +131,7 @@ const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
                         fontWeight: 700,
                         color: '#fff',
                     }}>
-                        COMING SOON
+                        OPTIMIZING FOR PRODUCTION
                     </span>
                 )}
                 {data.access !== 'public' && (
@@ -176,7 +176,7 @@ const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
                     e.currentTarget.style.transform = 'scale(1)';
                 }}
             >
-                {isComingSoon ? 'COMING SOON' : 'START MATCHMAKING'}
+                {isComingSoon ? 'COMING SOON' : 'START TRAINING'}
             </button>
         </div>
     );

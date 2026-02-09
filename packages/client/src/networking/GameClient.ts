@@ -19,7 +19,7 @@ export class GameClient {
 
         // Use same-origin in production. Override with VITE_SERVER_URL when needed.
         const configuredServerUrl = (import.meta.env.VITE_SERVER_URL as string | undefined)?.trim();
-        const devServerPort = (import.meta.env.VITE_SERVER_PORT as string | undefined)?.trim() || '3000';
+        const devServerPort = (import.meta.env.VITE_SERVER_PORT as string | undefined)?.trim() || '10000';
         const devFallbackUrl =
             import.meta.env.DEV && !configuredServerUrl
                 ? `${window.location.protocol}//${window.location.hostname}:${devServerPort}`

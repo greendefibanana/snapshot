@@ -181,6 +181,7 @@ export class GameBridge {
     private remotePlayerRootsByPlayerId: Map<string, { position: Vector3; lastSeen: number }> = new Map();
     private remotePoseBuffers: Map<PlayerId, PoseSample[]> = new Map();
     private remoteGroundedByPlayerId: Map<PlayerId, boolean> = new Map();
+    private interpolatedEntitiesOut: Map<EntityId, { position: Vector3; rotation: Quaternion; isGrounded?: boolean }> = new Map();
     private serverCorrectionTarget: Vector3 | null = null;
     private pendingPlayerDeaths: Map<PlayerId, PlayerId | null> = new Map();
     private lastKillFeedKey: string | null = null;
@@ -920,7 +921,8 @@ export class GameBridge {
         nowMs: number,
         delayTicks: number = 4
     ): Map<EntityId, { position: Vector3; rotation: Quaternion; isGrounded?: boolean }> {
-        const out = new Map<EntityId, { position: Vector3; rotation: Quaternion; isGrounded?: boolean }>();
+        const out = this.interpolatedEntitiesOut;
+        out.clear();
         const hasServerTiming = this.lastSnapshotTick !== null && this.lastSnapshotTimeMs !== null;
         const estimatedServerTick = hasServerTiming
             ? (this.lastSnapshotTick as number) + (nowMs - (this.lastSnapshotTimeMs as number)) / TICK_MS
@@ -1016,23 +1018,32 @@ function interpolatePoseSamples(samples: PoseSample[], renderTime: number, rende
     if (samples.length === 0) return null;
 
     if (renderTick !== undefined) {
-        const tickSamples = samples
-            .filter((sample) => sample.serverTick !== undefined)
-            .sort((a, b) => (a.serverTick as number) - (b.serverTick as number));
+        let firstTickSample: PoseSample | null = null;
+        let lastTickSample: PoseSample | null = null;
 
-        if (tickSamples.length > 0) {
-            const first = tickSamples[0];
-            if (renderTick <= (first.serverTick as number)) {
-                return first;
+        for (const sample of samples) {
+            if (sample.serverTick === undefined) continue;
+            if (!firstTickSample) firstTickSample = sample;
+            lastTickSample = sample;
+        }
+
+        if (firstTickSample && lastTickSample) {
+            if (renderTick <= (firstTickSample.serverTick as number)) {
+                return firstTickSample;
             }
-            const last = tickSamples[tickSamples.length - 1];
-            if (renderTick >= (last.serverTick as number)) {
-                return last;
+            if (renderTick >= (lastTickSample.serverTick as number)) {
+                return lastTickSample;
             }
 
-            for (let i = 0; i < tickSamples.length - 1; i++) {
-                const a = tickSamples[i];
-                const b = tickSamples[i + 1];
+            let prev: PoseSample | null = null;
+            for (const sample of samples) {
+                if (sample.serverTick === undefined) continue;
+                if (!prev) {
+                    prev = sample;
+                    continue;
+                }
+                const a = prev;
+                const b = sample;
                 const aTick = a.serverTick as number;
                 const bTick = b.serverTick as number;
                 if (renderTick >= aTick && renderTick <= bTick) {
@@ -1048,9 +1059,10 @@ function interpolatePoseSamples(samples: PoseSample[], renderTime: number, rende
                         qy: slerped.qy,
                         qz: slerped.qz,
                         qw: slerped.qw,
-                        serverTick: tickSamples[i].serverTick,
+                        serverTick: a.serverTick,
                     };
                 }
+                prev = sample;
             }
         }
     }
