@@ -7,6 +7,7 @@
     "scripts": {
         "build": "tsc",
         "dev": "tsx watch src/server.ts",
+        "start:render": "tsx src/server.ts",
         "start": "node dist/server.js",
         "test": "vitest run",
         "test:watch": "vitest"
@@ -23,11 +24,11 @@
         "node-three-gltf": "^2.1.0",
         "socket.io": "^4.7.5",
         "three": "^0.160.1",
-        "three-mesh-bvh": "^0.7.8"
+        "three-mesh-bvh": "^0.7.8",
+        "tsx": "^4.7.0"
     },
     "devDependencies": {
         "@types/node": "^20.10.0",
-        "tsx": "^4.7.0",
         "typescript": "^5.3.3",
         "vitest": "^1.1.0"
     }
