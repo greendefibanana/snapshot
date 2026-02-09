@@ -178,7 +178,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         isGrounded?: boolean;
     }>();
     const CLIENT_AUTHORITY = false;
-    const POSE_SEND_INTERVAL_MS = 50;
+    const POSE_SEND_INTERVAL_MS = 33;
     const REMOTE_INTERPOLATION_DELAY_TICKS = 2;
     let lastPoseSentMs = 0;
     const ACK_GUARD = {

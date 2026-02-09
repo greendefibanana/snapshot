@@ -77,6 +77,9 @@ const ClientMessageType = {
 } as const;
 
 const CLIENT_POSE_AUTHORITY = true;
+const FULL_SNAPSHOT_INTERVAL_TICKS = Math.max(30, Number.parseInt(process.env.FULL_SNAPSHOT_INTERVAL_TICKS ?? '90', 10) || 90);
+const DELTA_INTERVAL_TICKS = Math.max(1, Number.parseInt(process.env.DELTA_INTERVAL_TICKS ?? '2', 10) || 2);
+const INPUT_ACK_INTERVAL_TICKS = Math.max(1, Number.parseInt(process.env.INPUT_ACK_INTERVAL_TICKS ?? '2', 10) || 2);
 
 const VALIDATION = {
     maxSpeed: 25, // units/sec
@@ -199,7 +202,10 @@ export class GameServer {
         // Create subsystems
         this.inputQueue = new ServerInputQueue();
         this.simulationLoop = createSimulationLoop(this.inputQueue);
-        this.stateBroadcaster = createStateBroadcaster();
+        this.stateBroadcaster = createStateBroadcaster({
+            fullSnapshotInterval: FULL_SNAPSHOT_INTERVAL_TICKS,
+            deltaInterval: DELTA_INTERVAL_TICKS,
+        });
 
         this.tickScheduler = createTickScheduler({
             onTick: (tick, deltaMs) => this.onTick(tick, deltaMs),
@@ -908,7 +914,11 @@ export class GameServer {
         for (const playerId of this.inputQueue.getPlayerIds()) {
             const lastSeq = this.simulationLoop.getLastProcessedInputSeq(playerId);
             const client = this.stateBroadcaster.getClientByPlayerId(playerId);
-            if (client && lastSeq > client.lastProcessedInputSeq) {
+            if (
+                client &&
+                lastSeq > client.lastProcessedInputSeq &&
+                currentTick - (client.lastInputAckSentTick ?? tick(0)) >= INPUT_ACK_INTERVAL_TICKS
+            ) {
                 this.stateBroadcaster.sendInputAck(client.id, lastSeq, currentTick);
             }
         }

@@ -47,6 +47,9 @@ export interface ConnectedClient {
 
     /** Last input sequence we processed */
     lastProcessedInputSeq: number;
+
+    /** Last tick we sent an input ack to this client */
+    lastInputAckSentTick?: Tick;
 }
 
 export interface StateBroadcasterConfig {
@@ -271,6 +274,7 @@ export class StateBroadcaster {
 
         this.sendToClient(client, message);
         client.lastProcessedInputSeq = lastSeq;
+        client.lastInputAckSentTick = processedAtTick;
     }
 
     /**
