@@ -306,13 +306,9 @@ export function calcSnapshotSize(snapshot: Snapshot): number {
  */
 export function serializeSnapshot(snapshot: Snapshot): ArrayBuffer {
     const size = calcSnapshotSize(snapshot);
-    // EMERGENCY: Use 10KB buffer to prevent any crash while debugging
-    const buffer = new ArrayBuffer(Math.max(size + 10240, 10240));
+    const buffer = new ArrayBuffer(size);
     const view = new DataView(buffer);
     let offset = 0;
-
-    // Debug logging
-    console.log(`[Snapshot] Calculated size: ${size}, Buffer size: ${buffer.byteLength}, Entities: ${snapshot.entities.length}`);
 
     // Header
     view.setUint32(offset, SNAPSHOT_FORMAT_VERSION, true); offset += 4;
@@ -323,13 +319,7 @@ export function serializeSnapshot(snapshot: Snapshot): ArrayBuffer {
 
     // Entities
     for (const entity of snapshot.entities) {
-        const entityStartOffset = offset;
         offset += serializeEntityState(view, offset, entity);
-        const entityBytesWritten = offset - entityStartOffset;
-        const entityCalcSize = calcEntityStateSize(entity);
-        if (entityBytesWritten !== entityCalcSize) {
-            console.error(`[Snapshot] Size mismatch for entity ${entity.id}: calculated ${entityCalcSize}, wrote ${entityBytesWritten}, components: ${entity.components}`);
-        }
     }
 
     // Deleted IDs
@@ -338,8 +328,9 @@ export function serializeSnapshot(snapshot: Snapshot): ArrayBuffer {
         offset += 4;
     }
 
-    console.log(`[Snapshot] Final offset: ${offset}, Calculated size: ${size}, Actual used: ${offset}, Buffer size: ${buffer.byteLength}`);
-
+    if (offset !== size) {
+        return buffer.slice(0, offset);
+    }
     return buffer;
 }
 

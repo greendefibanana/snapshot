@@ -179,6 +179,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     }>();
     const CLIENT_AUTHORITY = false;
     const POSE_SEND_INTERVAL_MS = 50;
+    const REMOTE_INTERPOLATION_DELAY_TICKS = 2;
     let lastPoseSentMs = 0;
     const ACK_GUARD = {
         maxStaleTicks: 20,
@@ -493,7 +494,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             lastSentTick = currentTick;
         }
 
-        const interpolatedRemotes = bridge.getRemoteInterpolatedEntities(now, 4);
+        const interpolatedRemotes = bridge.getRemoteInterpolatedEntities(now, REMOTE_INTERPOLATION_DELAY_TICKS);
 
         // Update BVH character controller
         if (characterController) {

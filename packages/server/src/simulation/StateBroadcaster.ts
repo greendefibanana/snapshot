@@ -42,6 +42,9 @@ export interface ConnectedClient {
     /** Last snapshot tick we sent to this client */
     lastSentSnapshotTick: Tick;
 
+    /** Last full snapshot base tick sent while waiting for ack */
+    lastSentFullSnapshotTick: Tick;
+
     /** Last input sequence we processed */
     lastProcessedInputSeq: number;
 }
@@ -196,6 +199,7 @@ export class StateBroadcaster {
         for (const client of this.clients.values()) {
             this.sendToClient(client, message);
             client.lastSentSnapshotTick = snapshot.tick;
+            client.lastSentFullSnapshotTick = snapshot.tick;
         }
     }
 
@@ -234,13 +238,18 @@ export class StateBroadcaster {
             // Check if client has the base snapshot
             if (client.lastAckedTick >= this.lastFullSnapshotTick) {
                 this.sendToClient(client, message);
+                client.lastSentSnapshotTick = snapshot.tick;
             } else {
-                // Client is behind, send full snapshot
-                const fullData = this.config.serializeSnapshot(snapshot);
-                const fullMessage = wrapMessage(MessageType.Snapshot, fullData);
-                this.sendToClient(client, fullMessage);
+                // Client is behind; send one full snapshot for this base tick
+                // and wait for ack to avoid flooding snapshots every delta tick.
+                if (client.lastSentFullSnapshotTick < this.lastFullSnapshotTick) {
+                    const fullData = this.config.serializeSnapshot(snapshot);
+                    const fullMessage = wrapMessage(MessageType.Snapshot, fullData);
+                    this.sendToClient(client, fullMessage);
+                    client.lastSentFullSnapshotTick = this.lastFullSnapshotTick;
+                    client.lastSentSnapshotTick = snapshot.tick;
+                }
             }
-            client.lastSentSnapshotTick = snapshot.tick;
         }
     }
 

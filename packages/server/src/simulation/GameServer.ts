@@ -358,6 +358,7 @@ export class GameServer {
             channel,
             lastAckedTick: tick(0),
             lastSentSnapshotTick: tick(0),
+            lastSentFullSnapshotTick: tick(0),
             lastProcessedInputSeq: -1,
         };
         this.stateBroadcaster.addClient(client);
