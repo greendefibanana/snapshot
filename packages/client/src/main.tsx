@@ -330,7 +330,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     let lastTime = performance.now();
     let frameCount = 0;
     let fpsUpdateTime = lastTime;
-    const NETDBG = true;
+    const NETDBG = import.meta.env.DEV;
     let lastNetDbgMs = 0;
 
     // Simulated player position (would come from game state)

@@ -25,12 +25,16 @@ export class GameClient {
                 ? `${window.location.protocol}//${window.location.hostname}:${devServerPort}`
                 : undefined;
         const socketUrl = configuredServerUrl || devFallbackUrl;
+        const socketOptions = {
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 500,
+            reconnectionDelayMax: 5000,
+            timeout: 20000,
+        };
 
-        this.channel = socketUrl ? io(socketUrl, {
-            transports: ['websocket'],
-        }) : io({
-            transports: ['websocket'],
-        });
+        this.channel = socketUrl ? io(socketUrl, socketOptions) : io(socketOptions);
 
         // Setup bridge listeners (UI -> Game)
         this.setupBridgeListeners();

@@ -138,6 +138,24 @@ function normalizeRawData(data: unknown): ArrayBuffer | null {
     return null;
 }
 
+function summarizeDisconnectDetails(details: any): Record<string, unknown> | undefined {
+    if (!details || typeof details !== 'object') return undefined;
+    const out: Record<string, unknown> = {};
+    if ('description' in details) out.description = details.description;
+    if ('message' in details) out.message = details.message;
+    if ('name' in details) out.name = details.name;
+    if ('type' in details) out.type = details.type;
+    if ('context' in details && details.context && typeof details.context === 'object') {
+        const context = details.context as any;
+        out.context = {
+            transport: context.transport?.name ?? context.transport,
+            status: context.status,
+            code: context.code,
+        };
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+}
+
 // =============================================================================
 // GAME SERVER
 // =============================================================================
@@ -164,6 +182,7 @@ export class GameServer {
     private playerChannels: Map<string, Socket> = new Map();
     private latestClientPoses: Map<string, { position: { x: number; y: number; z: number }; velocity?: { x: number; y: number; z: number }; rotation?: { x: number; y: number; z: number; w: number }; isGrounded?: boolean; timeMs: number }> = new Map();
     private lastAcceptedPoses: Map<string, { position: { x: number; y: number; z: number }; timeMs: number }> = new Map();
+    private lastLagWarningAtMs = 0;
     private bvh: ServerBVH | null = null;
     private started = false;
     private startedMatches: Set<string> = new Set();
@@ -185,7 +204,11 @@ export class GameServer {
         this.tickScheduler = createTickScheduler({
             onTick: (tick, deltaMs) => this.onTick(tick, deltaMs),
             onTicksSkipped: (count) => {
-                console.warn(`GameServer: Skipped ${count} ticks due to lag`);
+                const now = Date.now();
+                if (now - this.lastLagWarningAtMs >= 5000) {
+                    console.warn(`GameServer: Skipped ${count} ticks due to lag`);
+                    this.lastLagWarningAtMs = now;
+                }
             },
             onStats: (stats) => {
                 // Could log or expose via API
@@ -237,6 +260,21 @@ export class GameServer {
                 origin: '*',
                 methods: ['GET', 'POST'],
             },
+            transports: ['websocket', 'polling'],
+            pingInterval: 25000,
+            pingTimeout: 60000,
+            connectionStateRecovery: {
+                maxDisconnectionDuration: 120000,
+                skipMiddlewares: true,
+            },
+            perMessageDeflate: false,
+        });
+        this.io.engine.on('connection_error', (error: any) => {
+            console.warn('GameServer: Engine connection error', {
+                code: error?.code,
+                message: error?.message,
+                context: summarizeDisconnectDetails(error?.context),
+            });
         });
 
         // Setup connection handler
@@ -301,6 +339,14 @@ export class GameServer {
         }
 
         console.log(`GameServer: Player connected: ${playerId}`);
+        console.log('GameServer: Transport/session', {
+            playerId,
+            transport: (channel as any).conn?.transport?.name,
+            recovered: (channel as any).recovered === true,
+            address: channel.handshake.address,
+            forwardedFor: channel.handshake.headers['x-forwarded-for'],
+            userAgent: channel.handshake.headers['user-agent'],
+        });
 
         // Store channel
         this.playerChannels.set(playerId, channel);
@@ -405,7 +451,19 @@ export class GameServer {
             }
         });
 
-        channel.on('disconnect', () => {
+        channel.on('disconnect', (reason: string, details?: any) => {
+            const match = this.matchmaker.getMatchForPlayer(playerId as any);
+            const lobbyState = this.matchmaker.getLobbyState(playerId as any);
+            console.warn('GameServer: Player socket disconnect', {
+                playerId,
+                reason,
+                transport: (channel as any).conn?.transport?.name,
+                connected: channel.connected,
+                recovered: (channel as any).recovered === true,
+                matchId: match?.id,
+                lobbyStatus: (lobbyState as any)?.status,
+                details: summarizeDisconnectDetails(details),
+            });
             this.onPlayerDisconnect(playerId);
         });
 
