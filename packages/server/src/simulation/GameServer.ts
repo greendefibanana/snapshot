@@ -188,6 +188,7 @@ export class GameServer {
     private lastLagWarningAtMs = 0;
     private bvh: ServerBVH | null = null;
     private started = false;
+    private startupComplete = false;
     private startedMatches: Set<string> = new Set();
 
     constructor(config: GameServerConfig) {
@@ -239,23 +240,6 @@ export class GameServer {
         }
 
         console.log('GameServer: Starting...');
-        await this.playerNameStore.load();
-
-        if (CLIENT_POSE_AUTHORITY) {
-            this.bvh = new ServerBVH();
-            const mapPath = mapPathFromCwd();
-            console.log(`GameServer: Loading Map2.glb for BVH at ${mapPath}`);
-            await this.bvh.loadMap(mapPath, 3, 0.1);
-            const bounds = this.bvh.getBounds();
-            if (bounds) {
-                console.log(`GameServer: BVH bounds min=(${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) max=(${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
-            }
-        }
-
-        // Initialize physics if enabled
-        if (this.config.enablePhysics) {
-            await this.simulationLoop.initPhysics();
-        }
 
         // Initialize Socket.io (WebSocket/TCP)
         this.httpServer = http.createServer((req, res) => {
@@ -285,19 +269,43 @@ export class GameServer {
 
         // Setup connection handler
         this.io.on('connection', (socket) => {
+            if (!this.startupComplete) {
+                socket.emit('game_message', { severity: 'info', message: 'Server is starting up. Please reconnect in a moment.' });
+                socket.disconnect(true);
+                return;
+            }
             this.onPlayerConnect(socket);
         });
 
-        // Start listening
+        // Start listening early so hosting providers can detect the open port.
         await new Promise<void>((resolve) => {
             this.httpServer!.listen(this.config.port, this.config.host, () => resolve());
         });
 
         console.log(`GameServer: Socket.io listening on ${this.config.host}:${this.config.port}`);
 
+        await this.playerNameStore.load();
+
+        if (CLIENT_POSE_AUTHORITY) {
+            this.bvh = new ServerBVH();
+            const mapPath = mapPathFromCwd();
+            console.log(`GameServer: Loading Map2.glb for BVH at ${mapPath}`);
+            await this.bvh.loadMap(mapPath, 3, 0.1);
+            const bounds = this.bvh.getBounds();
+            if (bounds) {
+                console.log(`GameServer: BVH bounds min=(${bounds.min.x.toFixed(2)},${bounds.min.y.toFixed(2)},${bounds.min.z.toFixed(2)}) max=(${bounds.max.x.toFixed(2)},${bounds.max.y.toFixed(2)},${bounds.max.z.toFixed(2)})`);
+            }
+        }
+
+        // Initialize physics if enabled
+        if (this.config.enablePhysics) {
+            await this.simulationLoop.initPhysics();
+        }
+
         // Start tick scheduler
         this.tickScheduler.start();
 
+        this.startupComplete = true;
         this.started = true;
         console.log('GameServer: Started successfully');
     }
@@ -329,6 +337,7 @@ export class GameServer {
         this.simulationLoop.destroy();
 
         this.started = false;
+        this.startupComplete = false;
         console.log('GameServer: Stopped');
     }
 
