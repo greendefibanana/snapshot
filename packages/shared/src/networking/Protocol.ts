@@ -344,7 +344,8 @@ export function serializeClientMessage(msg: ClientMessage): ArrayBuffer {
     // For now, use JSON. Replace with binary protocol (e.g., MessagePack) later.
     const json = JSON.stringify(msg);
     const encoder = new TextEncoder();
-    return encoder.encode(json).buffer;
+    const bytes = encoder.encode(json);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 /**
@@ -362,7 +363,8 @@ export function deserializeClientMessage(buffer: ArrayBuffer): ClientMessage {
 export function serializeServerMessage(msg: ServerMessage): ArrayBuffer {
     const json = JSON.stringify(msg);
     const encoder = new TextEncoder();
-    return encoder.encode(json).buffer;
+    const bytes = encoder.encode(json);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 /**

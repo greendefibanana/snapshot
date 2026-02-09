@@ -17,10 +17,18 @@ export class GameClient {
     constructor() {
         this.bridge = getGameBridge();
 
-        // Initialize Socket.io client
-        // Note: URL/port should ideally come from env vars
-        const port = 3000; // Match server port
-        this.channel = io(`http://${window.location.hostname}:${port}`, {
+        // Use same-origin in production. Override with VITE_SERVER_URL when needed.
+        const configuredServerUrl = (import.meta.env.VITE_SERVER_URL as string | undefined)?.trim();
+        const devServerPort = (import.meta.env.VITE_SERVER_PORT as string | undefined)?.trim() || '3000';
+        const devFallbackUrl =
+            import.meta.env.DEV && !configuredServerUrl
+                ? `${window.location.protocol}//${window.location.hostname}:${devServerPort}`
+                : undefined;
+        const socketUrl = configuredServerUrl || devFallbackUrl;
+
+        this.channel = socketUrl ? io(socketUrl, {
+            transports: ['websocket'],
+        }) : io({
             transports: ['websocket'],
         });
 
@@ -107,7 +115,7 @@ export class GameClient {
 
         this.channel.on('connect_error', (error) => {
             console.error('GameClient: Connection error', error);
-            console.warn('GameClient: Is the server running? Check port 3000.');
+            console.warn('GameClient: Check VITE_SERVER_URL or ensure backend is reachable.');
             this.bridge.notifyDisconnected();
         });
 

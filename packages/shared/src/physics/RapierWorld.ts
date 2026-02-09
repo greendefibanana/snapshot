@@ -6,7 +6,7 @@ export class RapierWorld {
 
     async init(gravity: { x: number; y: number; z: number } = { x: 0, y: -30, z: 0 }): Promise<void> {
         if (this.initialized) return;
-        await RAPIER.init({});
+        await RAPIER.init();
         this.world = new RAPIER.World(gravity);
         this.initialized = true;
     }

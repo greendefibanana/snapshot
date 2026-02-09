@@ -25,6 +25,6 @@ The authoritative game server for SNAPSHOT.
 
 ## Troubleshooting
 
--   **Port 3000 in use**: Check if another process is using port 3000.
--   **Connection Refused**: Ensure the server is actually running. The client expects it on `localhost:3000`.
+-   **Port in use**: Check if another process is using your configured `PORT` (default `10000` in production entrypoint).
+-   **Connection Refused**: Ensure the server is actually running. In production, client uses same-origin unless `VITE_SERVER_URL` is set.
 -   **Web3 Errors**: Ensure you have a valid Internet connection, as the server may try to check chain state.

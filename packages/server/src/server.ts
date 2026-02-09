@@ -1,17 +1,27 @@
 
 import { createGameServer } from './simulation/GameServer.js';
 import dotenv from 'dotenv';
+import * as fs from 'node:fs';
 import path from 'path';
 
 // Load env vars
-dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
+const envCandidates = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '../../.env'),
+];
+const envPath = envCandidates.find((candidate) => fs.existsSync(candidate));
+if (envPath) {
+    dotenv.config({ path: envPath });
+}
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT || '10000', 10);
+const HOST = process.env.HOST || '0.0.0.0';
 
 console.log('Starting SNAPSHOT Game Server...');
 
 const server = createGameServer({
     port: PORT,
+    host: HOST,
     maxPlayers: 20, // Global limit, but matchmaking manages matches
     enablePhysics: false,
 });

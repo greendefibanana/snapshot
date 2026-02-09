@@ -3,6 +3,10 @@ node_modules/
 
 # Build outputs
 dist/
+build/
+.vite/
+.cache/
+.parcel-cache/
 *.tsbuildinfo
 
 # Environment
@@ -22,6 +26,7 @@ Thumbs.db
 
 # Logs
 *.log
+*.pid
 npm-debug.log*
 
 # Test coverage

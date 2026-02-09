@@ -6,6 +6,8 @@
  */
 
 import * as http from 'node:http';
+import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import { Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
@@ -41,6 +43,9 @@ import { Vector3 } from 'three';
 export interface GameServerConfig {
     /** Socket.io port */
     port: number;
+
+    /** Host interface to bind */
+    host?: string;
 
     /** Maximum players per room */
     maxPlayers?: number;
@@ -141,6 +146,7 @@ export class GameServer {
     private config: Required<GameServerConfig>;
     private io: SocketIOServer | null = null;
     private httpServer: http.Server | null = null;
+    private clientDistDir: string | null = null;
 
     private tickScheduler: TickScheduler;
     private simulationLoop: SimulationLoop;
@@ -165,9 +171,11 @@ export class GameServer {
     constructor(config: GameServerConfig) {
         this.config = {
             port: config.port,
+            host: config.host ?? '0.0.0.0',
             maxPlayers: config.maxPlayers ?? 8,
             enablePhysics: config.enablePhysics ?? false,
         };
+        this.clientDistDir = this.resolveClientDistDir();
 
         // Create subsystems
         this.inputQueue = new ServerInputQueue();
@@ -221,7 +229,9 @@ export class GameServer {
         }
 
         // Initialize Socket.io (WebSocket/TCP)
-        this.httpServer = http.createServer();
+        this.httpServer = http.createServer((req, res) => {
+            void this.handleHttpRequest(req, res);
+        });
         this.io = new SocketIOServer(this.httpServer, {
             cors: {
                 origin: '*',
@@ -236,10 +246,10 @@ export class GameServer {
 
         // Start listening
         await new Promise<void>((resolve) => {
-            this.httpServer!.listen(this.config.port, () => resolve());
+            this.httpServer!.listen(this.config.port, this.config.host, () => resolve());
         });
 
-        console.log(`GameServer: Socket.io listening on port ${this.config.port}`);
+        console.log(`GameServer: Socket.io listening on ${this.config.host}:${this.config.port}`);
 
         // Start tick scheduler
         this.tickScheduler.start();
@@ -520,6 +530,110 @@ export class GameServer {
         }
 
         this.beginMatchCountdown(match);
+    }
+
+    private resolveClientDistDir(): string | null {
+        const candidates = [
+            path.resolve(process.cwd(), 'packages', 'client', 'dist'),
+            path.resolve(process.cwd(), '..', 'client', 'dist'),
+            path.resolve(process.cwd(), '..', '..', 'client', 'dist'),
+        ];
+        for (const candidate of candidates) {
+            if (fs.existsSync(path.join(candidate, 'index.html'))) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private getContentType(filePath: string): string {
+        const ext = path.extname(filePath).toLowerCase();
+        switch (ext) {
+            case '.html': return 'text/html; charset=utf-8';
+            case '.js': return 'text/javascript; charset=utf-8';
+            case '.css': return 'text/css; charset=utf-8';
+            case '.json': return 'application/json; charset=utf-8';
+            case '.svg': return 'image/svg+xml';
+            case '.png': return 'image/png';
+            case '.jpg':
+            case '.jpeg': return 'image/jpeg';
+            case '.webp': return 'image/webp';
+            case '.ico': return 'image/x-icon';
+            case '.map': return 'application/json; charset=utf-8';
+            default: return 'application/octet-stream';
+        }
+    }
+
+    private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const method = req.method ?? 'GET';
+        const rawUrl = req.url ?? '/';
+        const url = new URL(rawUrl, 'http://localhost');
+        const pathname = decodeURIComponent(url.pathname);
+
+        if (pathname.startsWith('/socket.io')) {
+            return;
+        }
+
+        if (pathname === '/health') {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ status: 'ok' }));
+            return;
+        }
+
+        if (!this.clientDistDir || (method !== 'GET' && method !== 'HEAD')) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Not Found');
+            return;
+        }
+
+        const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+        const candidatePath = path.resolve(this.clientDistDir, relativePath);
+        const normalizedRoot = path.resolve(this.clientDistDir);
+        if (!candidatePath.startsWith(normalizedRoot)) {
+            res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Forbidden');
+            return;
+        }
+
+        let filePath = candidatePath;
+        let stat: fs.Stats | null = null;
+        try {
+            stat = await fsp.stat(filePath);
+        } catch {
+            stat = null;
+        }
+
+        if (!stat || !stat.isFile()) {
+            filePath = path.join(this.clientDistDir, 'index.html');
+            try {
+                stat = await fsp.stat(filePath);
+            } catch {
+                stat = null;
+            }
+        }
+
+        if (!stat || !stat.isFile()) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Not Found');
+            return;
+        }
+
+        const contentType = this.getContentType(filePath);
+        if (method === 'HEAD') {
+            res.writeHead(200, {
+                'Content-Type': contentType,
+                'Cache-Control': filePath.endsWith('.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
+            });
+            res.end();
+            return;
+        }
+
+        const body = await fsp.readFile(filePath);
+        res.writeHead(200, {
+            'Content-Type': contentType,
+            'Cache-Control': filePath.endsWith('.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
+        });
+        res.end(body);
     }
 
     private beginMatchCountdown(match: any): void {

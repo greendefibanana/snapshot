@@ -4,7 +4,11 @@
         "composite": true,
         "outDir": "./dist",
         "rootDir": "./src",
-        "noEmit": false
+        "noEmit": false,
+        "noUnusedLocals": false,
+        "noUnusedParameters": false,
+        "noUncheckedIndexedAccess": false,
+        "exactOptionalPropertyTypes": false
     },
     "include": [
         "src/**/*"
