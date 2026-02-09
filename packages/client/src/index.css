@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar and patterns from lobby */
+body {
+    background-color: #0A0A10;
+    color: white;
+    overflow-x: hidden;
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0A0A10;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #252530;
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #CCFF00;
+}
+
+.bg-grid-pattern {
+    background-image: radial-gradient(#252530 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+.diagonal-stripes {
+    background: repeating-linear-gradient(45deg,
+            rgba(0, 0, 0, 0),
+            rgba(0, 0, 0, 0) 10px,
+            rgba(0, 0, 0, 0.2) 10px,
+            rgba(0, 0, 0, 0.2) 20px);
+}
+
+/* Utility for mask image */
+.mask-image-gradient {
+    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
+.mask-image-b {
+    mask-image: linear-gradient(to top, transparent, black 20%);
+    -webkit-mask-image: linear-gradient(to top, transparent, black 20%);
+}

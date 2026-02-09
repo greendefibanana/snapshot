@@ -1,0 +1,229 @@
+/**
+ * Lobby Animations - CSS-based animations
+ * 
+ * Hover, button press, screen transitions, player slot entry.
+ * No layout changes, respects existing structure.
+ */
+
+/* =============================================================================
+   TRANSITIONS
+   ============================================================================= */
+
+/* Base transition for all interactive elements */
+[data-component="button"],
+[data-component="card"],
+[data-component="badge"],
+[data-component="player-slot"],
+[data-component="store-item-card"],
+[data-component="item-card"],
+[data-component="mode-card"] {
+    transition: all 0.2s ease-out;
+}
+
+/* =============================================================================
+   HOVER EFFECTS
+   ============================================================================= */
+
+/* Card hover - subtle lift */
+[data-component="card"]:hover,
+[data-component="mode-card"]:hover,
+[data-component="store-item-card"]:hover,
+[data-component="item-card"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Button hover - brightness */
+[data-component="button"]:hover:not(:disabled) {
+    filter: brightness(1.1);
+    transform: scale(1.02);
+}
+
+/* Badge hover - glow */
+[data-component="badge"]:hover {
+    filter: brightness(1.15);
+}
+
+/* Player slot hover */
+[data-component="player-slot"]:hover,
+[data-component="player-slot-card"]:hover {
+    transform: scale(1.02);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* =============================================================================
+   BUTTON PRESS
+   ============================================================================= */
+
+[data-component="button"]:active:not(:disabled) {
+    transform: scale(0.97);
+    filter: brightness(0.95);
+}
+
+[data-component="card"]:active,
+[data-component="mode-card"]:active {
+    transform: scale(0.98);
+}
+
+/* =============================================================================
+   SCREEN TRANSITIONS
+   ============================================================================= */
+
+/* Screen enter animation */
+[data-screen] {
+    animation: screenEnter 0.3s ease-out;
+}
+
+@keyframes screenEnter {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* =============================================================================
+   PLAYER SLOT ENTRY
+   ============================================================================= */
+
+/* Slot fill animation */
+[data-component="player-slot"][data-empty="false"],
+[data-component="player-slot-card"] {
+    animation: slotEntry 0.25s ease-out;
+}
+
+@keyframes slotEntry {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Empty slot pulse */
+[data-component="slot-placeholder"] {
+    animation: emptyPulse 2s ease-in-out infinite;
+}
+
+@keyframes emptyPulse {
+
+    0%,
+    100% {
+        opacity: 0.5;
+    }
+
+    50% {
+        opacity: 0.7;
+    }
+}
+
+/* =============================================================================
+   COUNTDOWN ANIMATION
+   ============================================================================= */
+
+[data-countdown] {
+    animation: countdownPop 1s ease-out;
+}
+
+@keyframes countdownPop {
+    0% {
+        transform: scale(1.2);
+        opacity: 0;
+    }
+
+    20% {
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+/* =============================================================================
+   BADGE ANIMATIONS
+   ============================================================================= */
+
+[data-badge="wager"] {
+    animation: wagerGlow 2s ease-in-out infinite;
+}
+
+@keyframes wagerGlow {
+
+    0%,
+    100% {
+        filter: brightness(1);
+    }
+
+    50% {
+        filter: brightness(1.2);
+    }
+}
+
+/* =============================================================================
+   LOADING / QUEUEING
+   ============================================================================= */
+
+[data-screen="lobby-queueing"] [data-component="wait-timer"] {
+    animation: timerPulse 1s ease-in-out infinite;
+}
+
+@keyframes timerPulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.7;
+    }
+}
+
+/* =============================================================================
+   DISABLED STATE
+   ============================================================================= */
+
+[data-component="button"]:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    filter: none;
+}
+
+/* =============================================================================
+   SELECTED STATE
+   ============================================================================= */
+
+[data-selected="true"] {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 2px currentColor;
+}
+
+/* =============================================================================
+   LOCAL PLAYER HIGHLIGHT
+   ============================================================================= */
+
+[data-local="true"] {
+    animation: localHighlight 3s ease-in-out infinite;
+}
+
+@keyframes localHighlight {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+    }
+
+    50% {
+        box-shadow: 0 0 8px 2px rgba(255, 255, 255, 0.3);
+    }
+}

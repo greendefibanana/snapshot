@@ -1,0 +1,296 @@
+{
+    "id": "arena_01",
+    "name": "Training Arena",
+    "version": 1,
+    "author": "MarsCorp",
+    "bounds": {
+        "min": {
+            "x": -50,
+            "y": 0,
+            "z": -50
+        },
+        "max": {
+            "x": 50,
+            "y": 20,
+            "z": 50
+        }
+    },
+    "geometry": [
+        {
+            "id": "floor",
+            "type": "plane",
+            "position": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            },
+            "rotation": {
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "w": 1
+            },
+            "scale": {
+                "x": 100,
+                "y": 1,
+                "z": 100
+            },
+            "material": {
+                "type": "asset",
+                "value": "floor_metal"
+            },
+            "castShadow": false,
+            "receiveShadow": true
+        },
+        {
+            "id": "wall_north",
+            "type": "box",
+            "position": {
+                "x": 0,
+                "y": 5,
+                "z": -50
+            },
+            "rotation": {
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "w": 1
+            },
+            "scale": {
+                "x": 100,
+                "y": 10,
+                "z": 2
+            },
+            "material": {
+                "type": "asset",
+                "value": "wall_concrete"
+            },
+            "castShadow": true,
+            "receiveShadow": true
+        },
+        {
+            "id": "wall_south",
+            "type": "box",
+            "position": {
+                "x": 0,
+                "y": 5,
+                "z": 50
+            },
+            "rotation": {
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "w": 1
+            },
+            "scale": {
+                "x": 100,
+                "y": 10,
+                "z": 2
+            },
+            "material": {
+                "type": "asset",
+                "value": "wall_concrete"
+            },
+            "castShadow": true,
+            "receiveShadow": true
+        },
+        {
+            "id": "cover_center",
+            "type": "box",
+            "position": {
+                "x": 0,
+                "y": 1.5,
+                "z": 0
+            },
+            "rotation": {
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "w": 1
+            },
+            "scale": {
+                "x": 4,
+                "y": 3,
+                "z": 4
+            },
+            "material": {
+                "type": "asset",
+                "value": "cover_crate"
+            },
+            "castShadow": true,
+            "receiveShadow": true,
+            "tags": [
+                "cover"
+            ]
+        }
+    ],
+    "colliders": [
+        {
+            "id": "floor_col",
+            "type": "box",
+            "position": {
+                "x": 0,
+                "y": -0.5,
+                "z": 0
+            },
+            "rotation": {
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "w": 1
+            },
+            "size": {
+                "x": 100,
+                "y": 1,
+                "z": 100
+            },
+            "layer": 1,
+            "mask": 255,
+            "isTrigger": false
+        },
+        {
+            "id": "cover_col",
+            "type": "box",
+            "position": {
+                "x": 0,
+                "y": 1.5,
+                "z": 0
+            },
+            "rotation": {
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "w": 1
+            },
+            "size": {
+                "x": 4,
+                "y": 3,
+                "z": 4
+            },
+            "layer": 16,
+            "mask": 255,
+            "isTrigger": false
+        }
+    ],
+    "spawnZones": [
+        {
+            "id": "spawn_team_a",
+            "position": {
+                "x": -35,
+                "y": 0,
+                "z": 0
+            },
+            "radius": 5,
+            "teamId": 1,
+            "spawnType": "both",
+            "maxPlayers": 4,
+            "cooldown": 0,
+            "safetyRadius": 15,
+            "spawnDirection": {
+                "x": 1,
+                "y": 0,
+                "z": 0
+            }
+        },
+        {
+            "id": "spawn_team_b",
+            "position": {
+                "x": 35,
+                "y": 0,
+                "z": 0
+            },
+            "radius": 5,
+            "teamId": 2,
+            "spawnType": "both",
+            "maxPlayers": 4,
+            "cooldown": 0,
+            "safetyRadius": 15,
+            "spawnDirection": {
+                "x": -1,
+                "y": 0,
+                "z": 0
+            }
+        }
+    ],
+    "objectiveZones": [
+        {
+            "id": "point_center",
+            "type": "capture",
+            "position": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            },
+            "bounds": {
+                "width": 10,
+                "height": 5,
+                "depth": 10
+            },
+            "captureTime": 30,
+            "contestTime": 5,
+            "displayName": "Control Point",
+            "iconId": "capture",
+            "color": "#ffffff",
+            "order": 1,
+            "required": true
+        }
+    ],
+    "assets": {
+        "textures": {
+            "floor_tex": {
+                "path": "/assets/textures/floor_metal.jpg",
+                "fallback": "#444444",
+                "repeat": {
+                    "x": 10,
+                    "y": 10
+                }
+            },
+            "wall_tex": {
+                "path": "/assets/textures/concrete.jpg",
+                "fallback": "#666666"
+            }
+        },
+        "meshes": {},
+        "materials": {
+            "floor_metal": {
+                "color": "#555555",
+                "textureId": "floor_tex",
+                "roughness": 0.8,
+                "metalness": 0.3
+            },
+            "wall_concrete": {
+                "color": "#888888",
+                "textureId": "wall_tex",
+                "roughness": 0.9,
+                "metalness": 0.1
+            },
+            "cover_crate": {
+                "color": "#8B4513",
+                "roughness": 0.95,
+                "metalness": 0.0
+            }
+        }
+    },
+    "lighting": {
+        "ambientColor": "#404050",
+        "ambientIntensity": 0.4,
+        "directionalLights": [
+            {
+                "color": "#ffffff",
+                "intensity": 1.0,
+                "direction": {
+                    "x": -0.5,
+                    "y": -1,
+                    "z": -0.5
+                },
+                "castShadow": true
+            }
+        ],
+        "fog": {
+            "type": "linear",
+            "color": "#2a2a3a",
+            "near": 30,
+            "far": 100
+        }
+    }
+}

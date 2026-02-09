@@ -1,0 +1,34 @@
+{
+    "name": "@snapshot/server",
+    "version": "0.1.0",
+    "type": "module",
+    "main": "./dist/server.js",
+    "types": "./dist/server.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsx watch src/server.ts",
+        "start": "node dist/server.js",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@dimforge/rapier3d": "^0.12.0",
+        "@dimforge/rapier3d-compat": "^0.19.3",
+        "@gltf-transform/core": "^4.3.0",
+        "@solana/web3.js": "^1.98.4",
+        "@snapshot/shared": "*",
+        "colyseus": "^0.15.0",
+        "dotenv": "^17.2.3",
+        "gl-matrix": "^3.4.4",
+        "node-three-gltf": "^2.1.0",
+        "socket.io": "^4.7.5",
+        "three": "^0.160.1",
+        "three-mesh-bvh": "^0.7.8"
+    },
+    "devDependencies": {
+        "@types/node": "^20.10.0",
+        "tsx": "^4.7.0",
+        "typescript": "^5.3.3",
+        "vitest": "^1.1.0"
+    }
+}

@@ -1,0 +1,1045 @@
+/**
+ * AAA 3D Lobby Styles - Complete Edition
+ */
+
+/* =============================================================================
+   CONTAINER & LAYOUT
+   ============================================================================= */
+
+.lobby3d-container {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+.lobby3d-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.lobby3d-scene canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.lobby3d-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.lobby3d-overlay > * {
+  pointer-events: auto;
+}
+
+/* =============================================================================
+   HEADER
+   ============================================================================= */
+
+.lobby3d-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  background: linear-gradient(180deg, rgba(10, 10, 16, 0.95) 0%, transparent 100%);
+}
+
+.lobby3d-logo {
+  display: flex;
+  align-items: center;
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.lobby3d-logo-snap { color: #fff; }
+.lobby3d-logo-shot { color: #CCFF00; position: relative; }
+.lobby3d-logo-shot::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: #CCFF00;
+  transform: skewX(-20deg);
+}
+
+.lobby3d-nav {
+  display: flex;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.5rem;
+  border-radius: 999px;
+  backdrop-filter: blur(10px);
+}
+
+.lobby3d-nav-btn {
+  position: relative;
+  padding: 0.75rem 1.5rem;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 999px;
+}
+
+.lobby3d-nav-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.lobby3d-nav-btn--active { color: #CCFF00; background: rgba(204, 255, 0, 0.15); }
+
+.lobby3d-nav-underline {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 3px;
+  background: #CCFF00;
+  border-radius: 2px;
+}
+
+.lobby3d-stats {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.lobby3d-currency {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 999px;
+  border: 1px solid var(--currency-color, #CCFF00);
+}
+
+.lobby3d-currency-icon { color: var(--currency-color, #CCFF00); font-size: 1rem; }
+.lobby3d-currency-value { color: #fff; font-weight: 700; font-size: 0.875rem; }
+
+.lobby3d-settings-btn {
+  width: 40px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-settings-btn:hover { background: rgba(255, 255, 255, 0.2); transform: rotate(30deg); }
+
+.lobby3d-level {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #CCFF00, #7FFF00);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  color: #000;
+  font-size: 0.875rem;
+}
+
+/* =============================================================================
+   MAIN & PANELS
+   ============================================================================= */
+
+.lobby3d-main {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  padding: 1rem 2rem 2rem;
+  gap: 1.5rem;
+  overflow: hidden;
+}
+
+.lobby3d-panel {
+  background: rgba(10, 10, 16, 0.9);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.lobby3d-panel--left { width: 380px; min-width: 380px; animation: slideInLeft 0.4s ease-out; }
+.lobby3d-panel--right { width: 300px; min-width: 300px; animation: slideInRight 0.4s ease-out; }
+.lobby3d-panel--wide { flex: 1; max-width: 700px; animation: slideInLeft 0.4s ease-out; }
+
+.lobby3d-panel-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+}
+
+/* =============================================================================
+   PLAY TAB
+   ============================================================================= */
+
+.lobby3d-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.lobby3d-mode-card {
+  position: relative;
+  padding: 1.25rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid transparent;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+  overflow: hidden;
+}
+
+.lobby3d-mode-card:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateX(8px);
+  border-color: var(--mode-color, #CCFF00);
+}
+
+.lobby3d-mode-card--selected {
+  border-color: var(--mode-color, #CCFF00);
+  background: linear-gradient(90deg, rgba(204, 255, 0, 0.15), transparent);
+}
+
+.lobby3d-mode-glow {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.3s;
+  background: linear-gradient(90deg, var(--mode-color, #CCFF00) 0%, transparent 100%);
+  opacity: 0.1;
+}
+
+.lobby3d-mode-card:hover .lobby3d-mode-glow { opacity: 0.2; }
+
+.lobby3d-mode-title { font-size: 1.25rem; font-weight: 900; color: #fff; margin-bottom: 0.25rem; }
+.lobby3d-mode-desc { font-size: 0.875rem; color: rgba(255, 255, 255, 0.5); }
+
+.lobby3d-mode-check {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 24px;
+  height: 24px;
+  background: var(--mode-color, #CCFF00);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #000;
+  font-weight: 900;
+}
+
+.lobby3d-ruleset { margin-bottom: 1rem; }
+
+.lobby3d-ruleset-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 0.75rem;
+}
+
+.lobby3d-ruleset-options { display: flex; gap: 0.5rem; }
+
+.lobby3d-ruleset-btn {
+  flex: 1;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-ruleset-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.lobby3d-ruleset-btn--active { background: rgba(204, 255, 0, 0.2); border-color: #CCFF00; color: #CCFF00; }
+
+.lobby3d-play-btn {
+  width: 100%;
+  padding: 1.25rem;
+  background: linear-gradient(135deg, #CCFF00, #7FFF00);
+  border: none;
+  border-radius: 0.75rem;
+  color: #000;
+  font-size: 1.25rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  box-shadow: 0 0 30px rgba(204, 255, 0, 0.3);
+  margin-top: auto;
+}
+
+.lobby3d-play-btn:hover:not(:disabled) { transform: scale(1.02); box-shadow: 0 0 40px rgba(204, 255, 0, 0.5); }
+.lobby3d-play-btn--disabled { background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.3); cursor: not-allowed; box-shadow: none; }
+.lobby3d-play-btn--queueing { background: linear-gradient(135deg, #FF0055, #FF4080); color: #fff; box-shadow: 0 0 30px rgba(255, 0, 85, 0.3); animation: pulse 2s infinite; }
+
+.lobby3d-play-spinner {
+  width: 20px;
+  height: 20px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* =============================================================================
+   LOCKER / LOADOUT
+   ============================================================================= */
+
+.lobby3d-locker-tabs, .lobby3d-shop-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+}
+
+.lobby3d-locker-tab, .lobby3d-shop-tab {
+  flex: 1;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: none;
+  border-radius: 0.5rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+}
+
+.lobby3d-locker-tab:hover, .lobby3d-shop-tab:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+.lobby3d-locker-tab--active, .lobby3d-shop-tab--active { background: rgba(0, 255, 255, 0.2); color: #00FFFF; }
+
+.lobby3d-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.lobby3d-item-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid transparent;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-item-card:hover { transform: translateY(-4px); border-color: rgba(255, 255, 255, 0.2); }
+.lobby3d-item-card--selected { border-color: #CCFF00; box-shadow: 0 0 20px rgba(204, 255, 0, 0.3); }
+.lobby3d-item-card--locked { opacity: 0.5; cursor: not-allowed; }
+
+.lobby3d-item-image {
+  height: 100px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 0.5rem;
+}
+
+.lobby3d-item-info { padding: 0.75rem; }
+.lobby3d-item-info h4 { font-size: 0.875rem; font-weight: 700; color: #fff; margin: 0 0 0.25rem; }
+.lobby3d-item-subtitle { font-size: 0.625rem; color: rgba(255, 255, 255, 0.5); display: block; margin-bottom: 0.5rem; }
+
+.lobby3d-rarity {
+  display: inline-block;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.5rem;
+  font-weight: 900;
+  color: #fff;
+}
+
+.lobby3d-equipped {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.125rem 0.375rem;
+  background: #CCFF00;
+  border-radius: 0.25rem;
+  font-size: 0.5rem;
+  font-weight: 900;
+  color: #000;
+}
+
+.lobby3d-locked {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.5rem;
+}
+
+.lobby3d-price {
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(0, 0, 0, 0.8);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #00FFFF;
+}
+
+.lobby3d-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* =============================================================================
+   SHOP
+   ============================================================================= */
+
+.lobby3d-shop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+  overflow-y: auto;
+}
+
+.lobby3d-shop-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.2s;
+}
+
+.lobby3d-shop-card:hover { transform: translateY(-4px); border-color: rgba(255, 255, 255, 0.3); }
+
+.lobby3d-shop-image {
+  height: 120px;
+  padding: 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.lobby3d-shop-info {
+  padding: 0.75rem;
+  flex: 1;
+}
+
+.lobby3d-shop-info h4 { font-size: 1rem; font-weight: 700; color: #fff; margin: 0 0 0.25rem; }
+.lobby3d-shop-type { font-size: 0.625rem; color: rgba(255, 255, 255, 0.5); display: block; margin-bottom: 0.5rem; }
+
+.lobby3d-shop-price {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.lobby3d-price-snapshot { color: #CCFF00; }
+.lobby3d-price-credits { color: #00FFFF; }
+
+.lobby3d-buy-btn {
+  width: calc(100% - 1.5rem);
+  margin: 0 0.75rem 0.75rem;
+  padding: 0.75rem;
+  background: linear-gradient(135deg, #CCFF00, #7FFF00);
+  border: none;
+  border-radius: 0.5rem;
+  color: #000;
+  font-size: 0.875rem;
+  font-weight: 900;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-buy-btn:hover { transform: scale(1.02); box-shadow: 0 0 15px rgba(204, 255, 0, 0.4); }
+
+/* =============================================================================
+   BATTLE PASS
+   ============================================================================= */
+
+.lobby3d-bp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+}
+
+.lobby3d-bp-season {
+  font-size: 0.75rem;
+  color: #CCFF00;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  margin-top: 0.25rem;
+}
+
+.lobby3d-bp-tier-large {
+  text-align: center;
+}
+
+.lobby3d-bp-tier-label {
+  display: block;
+  font-size: 0.625rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 700;
+}
+
+.lobby3d-bp-tier-num {
+  font-size: 3rem;
+  font-weight: 900;
+  color: #CCFF00;
+  line-height: 1;
+}
+
+.lobby3d-bp-progress {
+  margin-bottom: 1.5rem;
+  flex-shrink: 0;
+}
+
+.lobby3d-bp-bar-large {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.lobby3d-bp-fill-large {
+  height: 100%;
+  background: linear-gradient(90deg, #CCFF00, #7FFF00);
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
+.lobby3d-bp-xp {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.lobby3d-bp-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.lobby3d-bp-tier-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+}
+
+.lobby3d-bp-tier-item--current { border-color: #CCFF00; background: rgba(204, 255, 0, 0.1); }
+.lobby3d-bp-tier-item--claimed { opacity: 0.5; }
+
+.lobby3d-bp-tier-number {
+  width: 40px;
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.lobby3d-bp-tier-item--current .lobby3d-bp-tier-number { color: #CCFF00; }
+
+.lobby3d-bp-rewards {
+  flex: 1;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.lobby3d-bp-reward {
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.lobby3d-bp-reward--skin { background: rgba(148, 0, 211, 0.3); color: #DA70D6; }
+.lobby3d-bp-reward--currency { background: rgba(204, 255, 0, 0.2); color: #CCFF00; }
+
+.lobby3d-bp-claimed {
+  width: 24px;
+  height: 24px;
+  background: #CCFF00;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #000;
+  font-weight: 900;
+}
+
+/* =============================================================================
+   RIGHT PANEL - CHARACTER & LOADOUT
+   ============================================================================= */
+
+.lobby3d-character-card {
+  background: linear-gradient(180deg, rgba(204, 255, 0, 0.1), transparent);
+  border: 1px solid rgba(204, 255, 0, 0.3);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.lobby3d-character-type {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.lobby3d-character-title {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: #fff;
+  margin: 0.25rem 0;
+}
+
+.lobby3d-rank {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.lobby3d-rank-tier {
+  padding: 0.25rem 0.75rem;
+  background: linear-gradient(135deg, #FF0055, #FF4080);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 900;
+  color: #fff;
+}
+
+.lobby3d-rank-division { font-size: 0.75rem; color: rgba(255, 255, 255, 0.5); }
+
+/* Loadout Preview */
+.lobby3d-loadout-preview {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.lobby3d-loadout-title {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.1em;
+  margin-bottom: 0.75rem;
+}
+
+.lobby3d-loadout-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lobby3d-loadout-item:last-child { border-bottom: none; }
+
+.lobby3d-loadout-slot {
+  font-size: 0.625rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.lobby3d-loadout-value {
+  font-size: 0.875rem;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* News */
+.lobby3d-news {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.lobby3d-news-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 0.75rem;
+}
+
+.lobby3d-news-item { position: relative; }
+
+.lobby3d-news-image {
+  height: 80px;
+  background: linear-gradient(135deg, #FF0055, #7000FF);
+  border-radius: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.lobby3d-news-tag {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  background: #CCFF00;
+  border-radius: 0.25rem;
+  font-size: 0.625rem;
+  font-weight: 900;
+  color: #000;
+  margin-bottom: 0.25rem;
+}
+
+.lobby3d-news-item p { font-size: 0.875rem; color: #fff; margin: 0; }
+
+/* =============================================================================
+   SOCIAL
+   ============================================================================= */
+
+.lobby3d-social-section { margin-bottom: 1.5rem; }
+
+.lobby3d-social-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.lobby3d-social-header h3 {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.05em;
+}
+
+.lobby3d-btn-small {
+  padding: 0.375rem 0.75rem;
+  background: rgba(204, 255, 0, 0.2);
+  border: 1px solid #CCFF00;
+  border-radius: 0.25rem;
+  color: #CCFF00;
+  font-size: 0.625rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-btn-small:hover { background: #CCFF00; color: #000; }
+.lobby3d-empty { color: rgba(255, 255, 255, 0.3); font-size: 0.875rem; text-align: center; padding: 1rem; }
+
+.lobby3d-party-code {
+  font-size: 0.75rem;
+  color: #CCFF00;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.05em;
+}
+
+.lobby3d-party-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.lobby3d-party-member {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.5rem;
+  color: #fff;
+  font-size: 0.875rem;
+}
+
+.lobby3d-party-member--leader { border: 1px solid #CCFF00; }
+.lobby3d-crown { margin-left: auto; }
+
+.lobby3d-friend-count { font-size: 0.75rem; color: rgba(255, 255, 255, 0.5); }
+
+.lobby3d-friends-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.lobby3d-friend {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  transition: background 0.2s;
+}
+
+.lobby3d-friend:hover { background: rgba(255, 255, 255, 0.05); }
+
+.lobby3d-friend-avatar {
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #fff;
+  position: relative;
+}
+
+.lobby3d-friend-avatar--online { background: rgba(0, 255, 0, 0.2); }
+
+.lobby3d-friend-avatar--online::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  background: #00FF00;
+  border-radius: 50%;
+  border: 2px solid #0A0A10;
+}
+
+.lobby3d-friend-info { flex: 1; display: flex; flex-direction: column; }
+.lobby3d-friend-name { font-size: 0.875rem; font-weight: 600; color: #fff; }
+.lobby3d-friend-status { font-size: 0.625rem; color: rgba(255, 255, 255, 0.5); text-transform: capitalize; }
+
+.lobby3d-btn-invite {
+  padding: 0.375rem 0.75rem;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0.25rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.625rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-btn-invite:hover:not(:disabled) { border-color: #CCFF00; color: #CCFF00; }
+.lobby3d-btn-invite:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* =============================================================================
+   QUEUE OVERLAY
+   ============================================================================= */
+
+.lobby3d-queue-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.lobby3d-queue-card {
+  background: rgba(10, 10, 16, 0.95);
+  border: 1px solid rgba(204, 255, 0, 0.3);
+  border-radius: 1rem;
+  padding: 3rem;
+  text-align: center;
+  min-width: 300px;
+}
+
+.lobby3d-queue-spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid rgba(204, 255, 0, 0.2);
+  border-top-color: #CCFF00;
+  border-radius: 50%;
+  margin: 0 auto 1.5rem;
+  animation: spin 1s linear infinite;
+}
+
+.lobby3d-queue-card h2 { font-size: 1.5rem; font-weight: 900; color: #CCFF00; margin-bottom: 0.5rem; }
+.lobby3d-queue-mode { color: rgba(255, 255, 255, 0.5); font-size: 0.875rem; margin-bottom: 1rem; }
+.lobby3d-queue-timer { font-size: 3rem; font-weight: 900; color: #fff; margin-bottom: 1.5rem; font-variant-numeric: tabular-nums; }
+
+.lobby3d-queue-cancel {
+  padding: 0.875rem 2rem;
+  background: transparent;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0.5rem;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-queue-cancel:hover { border-color: #FF0055; background: rgba(255, 0, 85, 0.1); color: #FF0055; }
+
+/* =============================================================================
+   MODAL
+   ============================================================================= */
+
+.lobby3d-modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.lobby3d-modal {
+  background: rgba(10, 10, 16, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  padding: 2rem;
+  min-width: 300px;
+  position: relative;
+}
+
+.lobby3d-modal h3 { font-size: 1.25rem; font-weight: 900; color: #fff; margin-bottom: 1.5rem; text-align: center; }
+
+.lobby3d-btn-primary {
+  width: 100%;
+  padding: 1rem;
+  background: linear-gradient(135deg, #CCFF00, #7FFF00);
+  border: none;
+  border-radius: 0.5rem;
+  color: #000;
+  font-size: 0.875rem;
+  font-weight: 900;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 1rem;
+}
+
+.lobby3d-btn-primary:hover { transform: scale(1.02); box-shadow: 0 0 20px rgba(204, 255, 0, 0.4); }
+
+.lobby3d-btn-secondary {
+  width: 100%;
+  padding: 1rem;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0.5rem;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lobby3d-btn-secondary:hover { border-color: #fff; background: rgba(255, 255, 255, 0.1); }
+
+.lobby3d-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 1rem 0;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 0.75rem;
+}
+
+.lobby3d-divider::before, .lobby3d-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lobby3d-divider span { padding: 0 1rem; }
+
+.lobby3d-input {
+  width: 100%;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.5rem;
+  color: #fff;
+  font-size: 1rem;
+  text-align: center;
+  letter-spacing: 0.1em;
+  margin-bottom: 1rem;
+  text-transform: uppercase;
+}
+
+.lobby3d-input:focus { outline: none; border-color: #CCFF00; }
+
+.lobby3d-modal-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.lobby3d-modal-close:hover { color: #fff; }
+
+/* =============================================================================
+   ANIMATIONS & SCROLLBAR
+   ============================================================================= */
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideInLeft { from { opacity: 0; transform: translateX(-30px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+
+/* Scrollbar */
+.lobby3d-grid::-webkit-scrollbar, .lobby3d-shop-grid::-webkit-scrollbar, .lobby3d-bp-tiers::-webkit-scrollbar, .lobby3d-friends-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lobby3d-grid::-webkit-scrollbar-track, .lobby3d-shop-grid::-webkit-scrollbar-track, .lobby3d-bp-tiers::-webkit-scrollbar-track, .lobby3d-friends-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+}
+
+.lobby3d-grid::-webkit-scrollbar-thumb, .lobby3d-shop-grid::-webkit-scrollbar-thumb, .lobby3d-bp-tiers::-webkit-scrollbar-thumb, .lobby3d-friends-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.lobby3d-grid::-webkit-scrollbar-thumb:hover, .lobby3d-shop-grid::-webkit-scrollbar-thumb:hover, .lobby3d-bp-tiers::-webkit-scrollbar-thumb:hover, .lobby3d-friends-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

@@ -1,0 +1,35 @@
+{
+    "name": "@snapshot/shared",
+    "version": "0.1.0",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./simulation": {
+            "import": "./dist/simulation/index.js",
+            "types": "./dist/simulation/index.d.ts"
+        },
+        "./lobby/*": {
+            "import": "./dist/lobby/*.js",
+            "types": "./dist/lobby/*.d.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc --watch",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@colyseus/schema": "^2.0.0",
+        "@dimforge/rapier3d-compat": "^0.19.3"
+    },
+    "devDependencies": {
+        "typescript": "^5.3.3",
+        "vitest": "^1.1.0"
+    }
+}

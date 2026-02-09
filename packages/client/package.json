@@ -1,0 +1,52 @@
+{
+    "name": "@snapshot/client",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc && vite build",
+        "preview": "vite preview",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@dimforge/rapier3d-compat": "^0.19.3",
+        "@react-three/drei": "^9.122.0",
+        "@react-three/fiber": "^8.18.0",
+        "@react-three/uikit": "^1.0.61",
+        "@solana/wallet-adapter-base": "^0.9.27",
+        "@solana/wallet-adapter-react": "^0.15.39",
+        "@solana/wallet-adapter-react-ui": "^0.9.39",
+        "@solana/wallet-adapter-wallets": "^0.19.37",
+        "@solana/web3.js": "^1.98.4",
+        "@snapshot/shared": "*",
+        "@tanstack/react-query": "^5.90.20",
+        "camera-controls": "^2.8.3",
+        "colyseus.js": "^0.15.0",
+        "framer-motion": "^12.29.2",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "socket.io-client": "^4.7.5",
+        "three": "^0.160.0",
+        "three-mesh-bvh": "^0.7.8",
+        "viem": "^2.45.1",
+        "wagmi": "^3.4.2",
+        "yoga-wasm-web": "^0.3.3",
+        "yuka": "^0.7.8"
+    },
+    "devDependencies": {
+        "@types/react": "^18.2.0",
+        "@types/react-dom": "^18.2.0",
+        "@types/three": "^0.160.0",
+        "@types/yuka": "^0.7.4",
+        "@vitejs/plugin-react": "^4.2.1",
+        "autoprefixer": "^10.4.24",
+        "lucide-react": "^0.563.0",
+        "postcss": "^8.5.6",
+        "tailwindcss": "^3.4.19",
+        "typescript": "^5.3.3",
+        "vite": "^5.0.10",
+        "vitest": "^1.1.0"
+    }
+}
