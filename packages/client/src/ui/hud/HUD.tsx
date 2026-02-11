@@ -640,8 +640,6 @@ export const HUD: React.FC<HUDProps> = ({ matchMode, matchRuleset }) => {
 
             {/* Stats */}
             <div style={styles.statsContainer}>
-                <div>FPS: {Math.max(0, Math.round(state.fps))}</div>
-                <div>Frame: {Math.max(0, state.frameTimeMs).toFixed(1)}ms</div>
                 <div>Ping: {state.ping}ms</div>
                 <div>K/D/A: {state.kills}/{state.deaths}/{state.assists}</div>
             </div>
