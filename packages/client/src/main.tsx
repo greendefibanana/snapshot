@@ -187,7 +187,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
 
     // Subscribe to UI events
     const remoteAnimStates = new Map<EntityId, {
-        lastPos: THREE.Vector3;
+        lastPos: { x: number; y: number; z: number };
         lastUpdateMs: number;
         isGrounded?: boolean;
     }>();
@@ -384,6 +384,14 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     const tmpShootDir = new THREE.Vector3();
     const tmpHitNormal = new THREE.Vector3(0, 1, 0);
     const tmpShotOrigin = new THREE.Vector3();
+    const tmpCorrectionDelta = new THREE.Vector3();
+    const tmpPlayerQuat = new THREE.Quaternion();
+    const tmpCameraDir = new THREE.Vector3();
+    const tmpRay = new THREE.Ray();
+    const upAxis = new THREE.Vector3(0, 1, 0);
+    const screenCenter = new THREE.Vector2(0, 0);
+    const shotRaycaster = new THREE.Raycaster();
+    const tmpHitPoint = new THREE.Vector3();
     let lastUiAiming = false;
     const playerVelocity = { x: 0, y: 0, z: 0 };
 
@@ -507,7 +515,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             if (correction) {
                 const localPos = characterController.copyPosition(tmpLocalPos);
                 const target = tmpCorrectionTarget.set(correction.x, correction.y, correction.z);
-                const delta = target.clone().sub(localPos);
+                const delta = tmpCorrectionDelta.subVectors(target, localPos);
                 const dist = delta.length();
                 if (dist > 0.01) {
                     const maxStep = 5.0 * deltaTime;
@@ -637,8 +645,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
 
             // Sync visual mesh to controller position
             const visualPos = characterController.copyVisualPosition(tmpVisualPos);
-            const playerQuat = new THREE.Quaternion();
-            playerQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), characterController.modelEulerY + MODEL_FORWARD_YAW);
+            const playerQuat = tmpPlayerQuat.setFromAxisAngle(upAxis, characterController.modelEulerY + MODEL_FORWARD_YAW);
 
             const renderPos = bridge.worldToRenderPosPublic(visualPos, true) ?? visualPos;
             renderer.updateEntityTransform(
@@ -737,14 +744,14 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             const verticalOffset = 1.8;
             const shoulderOffset = 0.4;
             const cosPitch = Math.cos(aim.pitch);
-            const dir = new THREE.Vector3(
+            const dir = tmpCameraDir.set(
                 Math.sin(aim.yaw) * cosPitch,
                 Math.sin(aim.pitch),
                 Math.cos(aim.yaw) * cosPitch
             );
             const shoulderX = Math.cos(aim.yaw) * shoulderOffset;
             const shoulderZ = -Math.sin(aim.yaw) * shoulderOffset;
-            const camPos = new THREE.Vector3(
+            const camPos = tmpCameraPos.set(
                 playerPosition.x - dir.x * distance + shoulderX,
                 playerPosition.y - dir.y * distance + verticalOffset,
                 playerPosition.z - dir.z * distance + shoulderZ
@@ -767,35 +774,38 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             }
             ensureVisual(entityId, 2, getDesiredCharacterModel(entityId));
 
-            const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
-            const rotation = new THREE.Quaternion(
-                pose.rotation.x,
-                pose.rotation.y,
-                pose.rotation.z,
-                pose.rotation.w
-            );
-
-            renderer.updateEntityTransform(entityId, position, {
-                x: rotation.x,
-                y: rotation.y,
-                z: rotation.z,
-                w: rotation.w,
+            renderer.updateEntityTransform(entityId, pose.position, {
+                x: pose.rotation.x,
+                y: pose.rotation.y,
+                z: pose.rotation.z,
+                w: pose.rotation.w,
             });
 
             let state = remoteAnimStates.get(entityId);
             if (!state) {
-                state = {
-                    lastPos: position.clone(),
+                const createdState: {
+                    lastPos: { x: number; y: number; z: number };
+                    lastUpdateMs: number;
+                    isGrounded?: boolean;
+                } = {
+                    lastPos: { x: pose.position.x, y: pose.position.y, z: pose.position.z },
                     lastUpdateMs: nowMs,
-                    isGrounded: pose.isGrounded,
                 };
-                remoteAnimStates.set(entityId, state);
+                if (pose.isGrounded !== undefined) {
+                    createdState.isGrounded = pose.isGrounded;
+                }
+                remoteAnimStates.set(entityId, createdState);
+                state = createdState;
             }
 
-            const vel = position.clone().sub(state.lastPos);
-            const speed = vel.length() / Math.max(deltaTime, 0.001);
+            const dx = pose.position.x - state.lastPos.x;
+            const dy = pose.position.y - state.lastPos.y;
+            const dz = pose.position.z - state.lastPos.z;
+            const speed = Math.sqrt(dx * dx + dy * dy + dz * dz) / Math.max(deltaTime, 0.001);
             const stale = nowMs - state.lastUpdateMs > 200;
-            state.lastPos.copy(position);
+            state.lastPos.x = pose.position.x;
+            state.lastPos.y = pose.position.y;
+            state.lastPos.z = pose.position.z;
             state.lastUpdateMs = nowMs;
             state.isGrounded = pose.isGrounded ?? state.isGrounded;
 
@@ -845,8 +855,8 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 // --- TPS AIMING LOGIC ---
                 // 1. Raycast from camera center to find what we are looking at
                 // Screen center is (0, 0) in normalized device coordinates
-                const raycaster = new THREE.Raycaster();
-                raycaster.setFromCamera(new THREE.Vector2(0, 0), renderer.mainCamera);
+                const raycaster = shotRaycaster;
+                raycaster.setFromCamera(screenCenter, renderer.mainCamera);
                 raycaster.far = 1000;
 
                 const aimPoint = tmpAimPoint;
@@ -871,12 +881,12 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 const shootDirection = tmpShootDir.subVectors(aimPoint, startPos).normalize();
 
                 // 3. Perform actual shot raycast from nozzle
-                let hitPoint = startPos.clone().add(shootDirection.clone().multiplyScalar(100));
+                const hitPoint = tmpHitPoint.copy(startPos).addScaledVector(shootDirection, 100);
                 const hitNormal = tmpHitNormal.set(0, 1, 0);
                 let hasHit = false;
 
                 if (bvhCollider && bvhCollider.geometry.boundsTree) {
-                    const ray = new THREE.Ray(startPos, shootDirection);
+                    const ray = tmpRay.set(startPos, shootDirection);
                     const hit = bvhCollider.geometry.boundsTree.raycastFirst(ray, THREE.DoubleSide);
 
                     if (hit) {
