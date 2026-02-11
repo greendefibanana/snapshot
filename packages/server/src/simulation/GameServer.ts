@@ -79,6 +79,13 @@ interface P2PRoomRecord {
     reservationAtMs: number | null;
 }
 
+type IceServerConfig = {
+    urls: string | string[];
+    username?: string;
+    credential?: string;
+    credentialType?: string;
+};
+
 const CLIENT_POSE_AUTHORITY = true;
 const FULL_SNAPSHOT_INTERVAL_TICKS = Math.max(30, Number.parseInt(process.env.FULL_SNAPSHOT_INTERVAL_TICKS ?? '90', 10) || 90);
 const DELTA_INTERVAL_TICKS = Math.max(1, Number.parseInt(process.env.DELTA_INTERVAL_TICKS ?? '2', 10) || 2);
@@ -192,6 +199,9 @@ export class GameServer {
     private p2pRoomsByCode: Map<string, P2PRoomRecord> = new Map();
     private p2pCodeByHostPlayer: Map<string, string> = new Map();
     private lastP2PRoomCleanupAtMs = 0;
+    private cachedIceServers: IceServerConfig[] | null = null;
+    private cachedIceServersExpiresAtMs = 0;
+    private iceServerFetchPromise: Promise<IceServerConfig[]> | null = null;
 
     constructor(config: GameServerConfig) {
         this.config = {
@@ -788,6 +798,25 @@ export class GameServer {
             return;
         }
 
+        if (pathname === '/api/ice-servers' && method === 'GET') {
+            try {
+                const iceServers = await this.getIceServersForClient();
+                res.writeHead(200, {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Cache-Control': 'no-store',
+                });
+                res.end(JSON.stringify({ iceServers }));
+            } catch (error) {
+                console.warn('GameServer: Failed to serve ICE servers', error);
+                res.writeHead(200, {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Cache-Control': 'no-store',
+                });
+                res.end(JSON.stringify({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }));
+            }
+            return;
+        }
+
         if (!this.clientDistDir || (method !== 'GET' && method !== 'HEAD')) {
             res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
             res.end('Not Found');
@@ -842,6 +871,79 @@ export class GameServer {
             'Cache-Control': filePath.endsWith('.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
         });
         res.end(body);
+    }
+
+    private normalizeIceServers(raw: unknown): IceServerConfig[] {
+        if (!Array.isArray(raw)) return [];
+        const out: IceServerConfig[] = [];
+        for (const entry of raw) {
+            if (!entry || typeof entry !== 'object') continue;
+            const urls = (entry as any).urls;
+            const hasStringUrls = typeof urls === 'string' && urls.trim().length > 0;
+            const hasArrayUrls = Array.isArray(urls) && urls.some((u) => typeof u === 'string' && u.trim().length > 0);
+            if (!hasStringUrls && !hasArrayUrls) continue;
+            const normalized: IceServerConfig = { urls };
+            if (typeof (entry as any).username === 'string') normalized.username = (entry as any).username;
+            if (typeof (entry as any).credential === 'string') normalized.credential = (entry as any).credential;
+            if (typeof (entry as any).credentialType === 'string') normalized.credentialType = (entry as any).credentialType;
+            out.push(normalized);
+        }
+        return out;
+    }
+
+    private async getIceServersForClient(): Promise<IceServerConfig[]> {
+        const now = Date.now();
+        if (this.cachedIceServers && now < this.cachedIceServersExpiresAtMs) {
+            return this.cachedIceServers;
+        }
+        if (this.iceServerFetchPromise) return this.iceServerFetchPromise;
+        this.iceServerFetchPromise = this.fetchIceServersFromTwilio()
+            .catch((error) => {
+                console.warn('GameServer: ICE server fetch failed, falling back to STUN', error);
+                return [{ urls: 'stun:stun.l.google.com:19302' }];
+            })
+            .finally(() => {
+                this.iceServerFetchPromise = null;
+            });
+        return this.iceServerFetchPromise;
+    }
+
+    private async fetchIceServersFromTwilio(): Promise<IceServerConfig[]> {
+        const sid = process.env.TWILIO_ACCOUNT_SID?.trim();
+        const authToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+        const ttlRaw = Number.parseInt(process.env.TWILIO_TURN_TTL ?? '3600', 10);
+        const ttlSec = Number.isFinite(ttlRaw) ? Math.max(300, Math.min(ttlRaw, 86400)) : 3600;
+
+        if (!sid || !authToken) {
+            const fallback = [{ urls: 'stun:stun.l.google.com:19302' }];
+            this.cachedIceServers = fallback;
+            this.cachedIceServersExpiresAtMs = Date.now() + 5 * 60_000;
+            return fallback;
+        }
+
+        const authHeader = Buffer.from(`${sid}:${authToken}`).toString('base64');
+        const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Tokens.json`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Basic ${authHeader}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ Ttl: String(ttlSec) }),
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Twilio token request failed (${response.status}): ${text.slice(0, 300)}`);
+        }
+
+        const payload = await response.json() as { ice_servers?: unknown };
+        const iceServers = this.normalizeIceServers(payload.ice_servers);
+        if (iceServers.length === 0) {
+            throw new Error('Twilio token response had no usable ice_servers');
+        }
+
+        this.cachedIceServers = iceServers;
+        this.cachedIceServersExpiresAtMs = Date.now() + Math.max(60, ttlSec - 30) * 1000;
+        return iceServers;
     }
 
     private beginMatchCountdown(match: any): void {

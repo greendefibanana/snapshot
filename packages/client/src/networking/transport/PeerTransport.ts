@@ -25,7 +25,14 @@ function randomCode(length: number = 6): string {
     return out;
 }
 
-function getPeerConfig(): ConstructorParameters<typeof Peer>[1] | undefined {
+const ICE_SERVERS_ENDPOINT = '/api/ice-servers';
+const ICE_SERVERS_FETCH_TIMEOUT_MS = 2500;
+const ICE_SERVERS_CACHE_MS = 5 * 60_000;
+let cachedServerIceServers: RTCIceServer[] | null = null;
+let cachedServerIceServersAtMs = 0;
+let inFlightIceServersFetch: Promise<RTCIceServer[] | null> | null = null;
+
+function readEnvIceServers(): RTCIceServer[] {
     const rawIceJson = (import.meta.env.VITE_ICE_SERVERS_JSON as string | undefined)?.trim();
     const turnUrl = (import.meta.env.VITE_TURN_URL as string | undefined)?.trim();
     const turnUsername = (import.meta.env.VITE_TURN_USERNAME as string | undefined)?.trim();
@@ -52,6 +59,63 @@ function getPeerConfig(): ConstructorParameters<typeof Peer>[1] | undefined {
             username: turnUsername,
             credential: turnCredential,
         });
+    }
+    return iceServers;
+}
+
+function normalizeIceServers(raw: unknown): RTCIceServer[] {
+    if (!Array.isArray(raw)) return [];
+    const out: RTCIceServer[] = [];
+    for (const entry of raw) {
+        if (!entry || typeof entry !== 'object') continue;
+        if (!('urls' in (entry as any))) continue;
+        out.push(entry as RTCIceServer);
+    }
+    return out;
+}
+
+async function fetchServerIceServers(): Promise<RTCIceServer[] | null> {
+    const now = Date.now();
+    if (cachedServerIceServers && now - cachedServerIceServersAtMs < ICE_SERVERS_CACHE_MS) {
+        return cachedServerIceServers;
+    }
+    if (inFlightIceServersFetch) return inFlightIceServersFetch;
+
+    inFlightIceServersFetch = (async () => {
+        const abortController = new AbortController();
+        const timeout = window.setTimeout(() => abortController.abort(), ICE_SERVERS_FETCH_TIMEOUT_MS);
+        try {
+            const response = await fetch(ICE_SERVERS_ENDPOINT, {
+                method: 'GET',
+                cache: 'no-store',
+                credentials: 'same-origin',
+                signal: abortController.signal,
+            });
+            if (!response.ok) return null;
+            const body = await response.json() as { iceServers?: unknown };
+            const normalized = normalizeIceServers(body?.iceServers);
+            if (normalized.length === 0) return null;
+            cachedServerIceServers = normalized;
+            cachedServerIceServersAtMs = Date.now();
+            return normalized;
+        } catch {
+            return null;
+        } finally {
+            window.clearTimeout(timeout);
+        }
+    })().finally(() => {
+        inFlightIceServersFetch = null;
+    });
+
+    return inFlightIceServersFetch;
+}
+
+async function getPeerConfig(): Promise<ConstructorParameters<typeof Peer>[1] | undefined> {
+    const envIceServers = readEnvIceServers();
+    const serverIceServers = await fetchServerIceServers();
+    const iceServers = [...envIceServers];
+    if (serverIceServers?.length) {
+        iceServers.push(...serverIceServers);
     }
     return { config: { iceServers } };
 }
@@ -95,8 +159,12 @@ export class PeerTransport implements ITransport {
 
     connect(): void {
         if (this.peer) return;
+        void this.openPeer();
+    }
 
-        const config = getPeerConfig();
+    private async openPeer(): Promise<void> {
+        const config = await getPeerConfig();
+        if (this.peer) return;
         this.peer = this.role === 'host'
             ? new Peer(this.code, config)
             : new Peer(undefined as any, config);
