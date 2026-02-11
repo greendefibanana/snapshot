@@ -191,6 +191,7 @@ export class GameBridge {
     private remotePoseBuffers: Map<PlayerId, PoseSample[]> = new Map();
     private remoteGroundedByPlayerId: Map<PlayerId, boolean> = new Map();
     private interpolatedEntitiesOut: Map<EntityId, { position: Vector3; rotation: Quaternion; isGrounded?: boolean }> = new Map();
+    private interpolatedEntitiesSeen: Set<EntityId> = new Set();
     private serverCorrectionTarget: Vector3 | null = null;
     private pendingPlayerDeaths: Map<PlayerId, PlayerId | null> = new Map();
     private lastKillFeedKey: string | null = null;
@@ -397,12 +398,24 @@ export class GameBridge {
      * Update game state and notify UI.
      */
     updateState(partial: Partial<UIGameState>): void {
+        const changed: Partial<UIGameState> = {};
+        let changedCount = 0;
+        for (const key of Object.keys(partial) as (keyof UIGameState)[]) {
+            const nextValue = partial[key];
+            if (nextValue !== this.currentState[key]) {
+                changed[key] = nextValue as never;
+                changedCount++;
+            }
+        }
+        if (changedCount === 0) {
+            return;
+        }
         this.currentState = {
             ...this.currentState,
-            ...partial,
+            ...changed,
         };
 
-        this.emitToUI({ type: 'state_update', state: partial });
+        this.emitToUI({ type: 'state_update', state: changed });
     }
 
     /**
@@ -1052,7 +1065,8 @@ export class GameBridge {
         delayTicks: number = 4
     ): Map<EntityId, { position: Vector3; rotation: Quaternion; isGrounded?: boolean }> {
         const out = this.interpolatedEntitiesOut;
-        out.clear();
+        const seen = this.interpolatedEntitiesSeen;
+        seen.clear();
         const hasServerTiming = this.lastSnapshotTick !== null && this.lastSnapshotTimeMs !== null;
         const estimatedServerTick = hasServerTiming
             ? (this.lastSnapshotTick as number) + (nowMs - (this.lastSnapshotTimeMs as number)) / TICK_MS
@@ -1071,8 +1085,46 @@ export class GameBridge {
             const rotation = { x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw };
             const isGrounded = this.remoteGroundedByPlayerId.get(playerId);
 
-            this.remoteRenderPos.set(playerId, position);
-            out.set(entityId as any, { position, rotation, isGrounded });
+            const existingRemoteRender = this.remoteRenderPos.get(playerId);
+            if (existingRemoteRender) {
+                existingRemoteRender.x = position.x;
+                existingRemoteRender.y = position.y;
+                existingRemoteRender.z = position.z;
+            } else {
+                this.remoteRenderPos.set(playerId, position);
+            }
+
+            const existingOut = out.get(entityId as any);
+            if (existingOut) {
+                existingOut.position.x = position.x;
+                existingOut.position.y = position.y;
+                existingOut.position.z = position.z;
+                existingOut.rotation.x = rotation.x;
+                existingOut.rotation.y = rotation.y;
+                existingOut.rotation.z = rotation.z;
+                existingOut.rotation.w = rotation.w;
+                if (isGrounded === undefined) {
+                    delete (existingOut as any).isGrounded;
+                } else {
+                    existingOut.isGrounded = isGrounded;
+                }
+            } else {
+                const nextOut: { position: Vector3; rotation: Quaternion; isGrounded?: boolean } = {
+                    position,
+                    rotation,
+                };
+                if (isGrounded !== undefined) {
+                    nextOut.isGrounded = isGrounded;
+                }
+                out.set(entityId as any, nextOut);
+            }
+            seen.add(entityId as any);
+        }
+
+        for (const entityId of out.keys()) {
+            if (!seen.has(entityId as any)) {
+                out.delete(entityId);
+            }
         }
 
         return out;
