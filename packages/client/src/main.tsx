@@ -446,7 +446,9 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         // FPS counter
         frameCount++;
         if (now - fpsUpdateTime >= 1000) {
-            bridge.updateState({ fps: frameCount });
+            const elapsed = now - fpsUpdateTime;
+            const avgFrameTimeMs = frameCount > 0 ? elapsed / frameCount : 0;
+            bridge.updateState({ fps: frameCount, frameTimeMs: avgFrameTimeMs });
             frameCount = 0;
             fpsUpdateTime = now;
         }

@@ -91,6 +91,9 @@ export interface UIGameState {
     /** Current FPS */
     fps: number;
 
+    /** Average frame time (ms) over the last FPS sample window */
+    frameTimeMs: number;
+
     /** Current ping (ms) */
     ping: number;
 
@@ -237,6 +240,7 @@ export class GameBridge {
         matchTimeRemaining: 0,
         killFeed: [],
         fps: 0,
+        frameTimeMs: 0,
         ping: 0,
         isAiming: false,
         isDead: false,

@@ -69,7 +69,7 @@ export const GameStateSelectors = {
     stats: (s: UIGameState) => ({ kills: s.kills, deaths: s.deaths, assists: s.assists }),
     match: (s: UIGameState) => ({ teamScores: s.teamScores, matchTimeRemaining: s.matchTimeRemaining }),
     connection: (s: UIGameState) => ({ isConnected: s.isConnected, isRunning: s.isRunning }),
-    performance: (s: UIGameState) => ({ fps: s.fps, ping: s.ping }),
+    performance: (s: UIGameState) => ({ fps: s.fps, frameTimeMs: s.frameTimeMs, ping: s.ping }),
 } as const;
 
 /**
