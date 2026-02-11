@@ -9,18 +9,26 @@ import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
-import { Server as SocketIOServer, type Socket } from 'socket.io';
+import { Server as SocketIOServer } from 'socket.io';
 import { Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import {
     type Tick,
     tick,
-    type InputFrame,
     ServerInputQueue,
     deserializeInput,
     deserializeInputBatch,
     deserializeInputAck,
 } from '@snapshot/shared/simulation';
-import { deserializeClientMessage, serializeServerMessage, type ClientMessage, type ServerMessage } from '@snapshot/shared';
+import {
+    BinaryMessageType,
+    deserializeClientMessage,
+    normalizeBinaryData,
+    serializeServerMessage,
+    type ClientMessage,
+    type ServerMessage,
+    unwrapBinaryMessage,
+    wrapBinaryMessage,
+} from '@snapshot/shared';
 
 import { TickScheduler, createTickScheduler } from './TickScheduler.js';
 import { SimulationLoop, createSimulationLoop } from './SimulationLoop.js';
@@ -28,13 +36,12 @@ import {
     StateBroadcaster,
     createStateBroadcaster,
     type ConnectedClient,
-    MessageType,
 } from './StateBroadcaster.js';
-import { SimpleMatchmaker, type Match } from '../services/SimpleMatchmaker.js';
+import { SimpleMatchmaker } from '../services/SimpleMatchmaker.js';
 import { PlayerNameStore } from '../services/PlayerNameStore.js';
 import { buildSettleWagerIx } from '../services/wagerProgram.js';
 import { ServerBVH, mapPathFromCwd } from '../physics/ServerBVH.js';
-import { Vector3 } from 'three';
+import { createSocketIoServerTransportChannel, type ServerTransportChannel } from '../networking/ServerTransport.js';
 
 // =============================================================================
 // TYPES
@@ -62,24 +69,25 @@ export interface GameServerStats {
     snapshotBufferSize: number;
 }
 
-// =============================================================================
-// MESSAGE PARSING
-// =============================================================================
-
-/**
- * Client message types.
- */
-const ClientMessageType = {
-    Input: 0x01,
-    InputBatch: 0x02,
-    Ack: 0x03,
-    Ping: 0x04,
-} as const;
+interface P2PRoomRecord {
+    code: string;
+    hostPlayerId: string;
+    hostPeerId: string;
+    createdAtMs: number;
+    lastHeartbeatAtMs: number;
+    reservedJoinerId: string | null;
+    reservationAtMs: number | null;
+}
 
 const CLIENT_POSE_AUTHORITY = true;
 const FULL_SNAPSHOT_INTERVAL_TICKS = Math.max(30, Number.parseInt(process.env.FULL_SNAPSHOT_INTERVAL_TICKS ?? '90', 10) || 90);
 const DELTA_INTERVAL_TICKS = Math.max(1, Number.parseInt(process.env.DELTA_INTERVAL_TICKS ?? '2', 10) || 2);
 const INPUT_ACK_INTERVAL_TICKS = Math.max(1, Number.parseInt(process.env.INPUT_ACK_INTERVAL_TICKS ?? '2', 10) || 2);
+const PRE_ROUND_COUNTDOWN_SEC = 10;
+const CHARACTER_MODELS = ['assasin', 'grizzly', 'kodiak', 'panda'] as const;
+const P2P_ROOM_HEARTBEAT_TTL_MS = 60_000;
+const P2P_RESERVATION_TTL_MS = 15_000;
+const P2P_ROOM_CLEANUP_INTERVAL_MS = 2_000;
 
 const VALIDATION = {
     maxSpeed: 25, // units/sec
@@ -118,29 +126,6 @@ function wagerMatchSeedLocal(matchId: string): Uint8Array {
     return out;
 }
 
-/**
- * Parse client message type.
- */
-function parseClientMessage(data: ArrayBuffer): { type: number; payload: ArrayBuffer } {
-    const view = new Uint8Array(data);
-    const type = view[0]!;
-    const payload = data.slice(1);
-    return { type, payload };
-}
-
-function normalizeRawData(data: unknown): ArrayBuffer | null {
-    if (data instanceof ArrayBuffer) {
-        return data;
-    }
-    if (ArrayBuffer.isView(data)) {
-        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-    }
-    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(data)) {
-        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-    }
-    return null;
-}
-
 function summarizeDisconnectDetails(details: any): Record<string, unknown> | undefined {
     if (!details || typeof details !== 'object') return undefined;
     const out: Record<string, unknown> = {};
@@ -157,6 +142,11 @@ function summarizeDisconnectDetails(details: any): Record<string, unknown> | und
         };
     }
     return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sanitizeP2PCode(value: unknown): string {
+    if (typeof value !== 'string') return '';
+    return value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
 }
 
 // =============================================================================
@@ -182,7 +172,7 @@ export class GameServer {
     private wagerPayouts: Set<string> = new Set();
     private wagerLocks: Map<string, Set<string>> = new Map();
 
-    private playerChannels: Map<string, Socket> = new Map();
+    private playerChannels: Map<string, ServerTransportChannel> = new Map();
     private latestClientPoses: Map<string, { position: { x: number; y: number; z: number }; velocity?: { x: number; y: number; z: number }; rotation?: { x: number; y: number; z: number; w: number }; isGrounded?: boolean; timeMs: number }> = new Map();
     private lastAcceptedPoses: Map<string, { position: { x: number; y: number; z: number }; timeMs: number }> = new Map();
     private lastLagWarningAtMs = 0;
@@ -190,6 +180,18 @@ export class GameServer {
     private started = false;
     private startupComplete = false;
     private startedMatches: Set<string> = new Set();
+    private matchByPlayerId: Map<string, string> = new Map();
+    private preRoundByMatchId: Map<string, {
+        players: string[];
+        loadedPlayers: Set<string>;
+        started: boolean;
+        durationSec: number;
+        endTick: Tick | null;
+        endedBroadcast: boolean;
+    }> = new Map();
+    private p2pRoomsByCode: Map<string, P2PRoomRecord> = new Map();
+    private p2pCodeByHostPlayer: Map<string, string> = new Map();
+    private lastP2PRoomCleanupAtMs = 0;
 
     constructor(config: GameServerConfig) {
         this.config = {
@@ -274,7 +276,7 @@ export class GameServer {
                 socket.disconnect(true);
                 return;
             }
-            this.onPlayerConnect(socket);
+            this.onPlayerConnect(createSocketIoServerTransportChannel(socket));
         });
 
         // Start listening early so hosting providers can detect the open port.
@@ -325,6 +327,8 @@ export class GameServer {
             channel.disconnect(true);
         }
         this.playerChannels.clear();
+        this.p2pRoomsByCode.clear();
+        this.p2pCodeByHostPlayer.clear();
 
         if (this.io) {
             this.io.close();
@@ -344,7 +348,7 @@ export class GameServer {
     /**
      * Handle player connection.
      */
-    private onPlayerConnect(channel: Socket): void {
+    private onPlayerConnect(channel: ServerTransportChannel): void {
         const playerId = channel.id;
 
         if (this.playerChannels.size >= this.config.maxPlayers) {
@@ -354,13 +358,14 @@ export class GameServer {
         }
 
         console.log(`GameServer: Player connected: ${playerId}`);
+        const connectionMeta = channel.connectionMeta();
         console.log('GameServer: Transport/session', {
             playerId,
-            transport: (channel as any).conn?.transport?.name,
-            recovered: (channel as any).recovered === true,
-            address: channel.handshake.address,
-            forwardedFor: channel.handshake.headers['x-forwarded-for'],
-            userAgent: channel.handshake.headers['user-agent'],
+            transport: connectionMeta.transport,
+            recovered: connectionMeta.recovered,
+            address: connectionMeta.address,
+            forwardedFor: connectionMeta.forwardedFor,
+            userAgent: connectionMeta.userAgent,
         });
 
         // Store channel
@@ -382,7 +387,7 @@ export class GameServer {
         // Setup message handlers
         // Raw for high-frequency game inputs
         channel.on('bin', (data: unknown) => {
-            const buffer = normalizeRawData(data);
+            const buffer = normalizeBinaryData(data);
             if (buffer) {
                 this.onMessage(playerId, buffer);
             }
@@ -467,15 +472,131 @@ export class GameServer {
             }
         });
 
+        channel.on('p2p_register_host', (data: any, ack?: (response: any) => void) => {
+            const code = sanitizeP2PCode(data?.code);
+            const peerId = typeof data?.peerId === 'string' ? data.peerId.trim() : '';
+            if (!code || !peerId) {
+                ack?.({ ok: false, error: 'invalid_request' });
+                return;
+            }
+
+            const now = Date.now();
+            this.cleanupStaleP2PRooms(now);
+            const previousCode = this.p2pCodeByHostPlayer.get(playerId);
+            if (previousCode && previousCode !== code) {
+                this.p2pRoomsByCode.delete(previousCode);
+            }
+
+            const existing = this.p2pRoomsByCode.get(code);
+            if (existing && existing.hostPlayerId !== playerId) {
+                ack?.({ ok: false, error: 'code_in_use' });
+                return;
+            }
+
+            this.p2pRoomsByCode.set(code, {
+                code,
+                hostPlayerId: playerId,
+                hostPeerId: peerId,
+                createdAtMs: existing?.createdAtMs ?? now,
+                lastHeartbeatAtMs: now,
+                reservedJoinerId: null,
+                reservationAtMs: null,
+            });
+            this.p2pCodeByHostPlayer.set(playerId, code);
+            ack?.({ ok: true, code, peerId });
+        });
+
+        channel.on('p2p_host_heartbeat', (data: any, ack?: (response: any) => void) => {
+            const code = sanitizeP2PCode(data?.code);
+            const room = code ? this.p2pRoomsByCode.get(code) : undefined;
+            if (!room || room.hostPlayerId !== playerId) {
+                ack?.({ ok: false, error: 'room_not_found' });
+                return;
+            }
+            room.lastHeartbeatAtMs = Date.now();
+            ack?.({ ok: true });
+        });
+
+        channel.on('p2p_request_join', (data: any, ack?: (response: any) => void) => {
+            const code = sanitizeP2PCode(data?.code);
+            if (!code) {
+                ack?.({ ok: false, error: 'invalid_code' });
+                return;
+            }
+            const now = Date.now();
+            this.cleanupStaleP2PRooms(now);
+            const room = this.p2pRoomsByCode.get(code);
+            if (!room) {
+                ack?.({ ok: false, error: 'room_not_found' });
+                return;
+            }
+            if (room.hostPlayerId === playerId) {
+                ack?.({ ok: false, error: 'cannot_join_own_room' });
+                return;
+            }
+            const hostChannel = this.playerChannels.get(room.hostPlayerId);
+            if (!hostChannel || !hostChannel.connected) {
+                this.p2pRoomsByCode.delete(code);
+                this.p2pCodeByHostPlayer.delete(room.hostPlayerId);
+                ack?.({ ok: false, error: 'host_offline' });
+                return;
+            }
+
+            if (
+                room.reservedJoinerId &&
+                room.reservedJoinerId !== playerId &&
+                room.reservationAtMs !== null &&
+                now - room.reservationAtMs < P2P_RESERVATION_TTL_MS
+            ) {
+                ack?.({ ok: false, error: 'room_full' });
+                return;
+            }
+
+            room.reservedJoinerId = playerId;
+            room.reservationAtMs = now;
+            room.lastHeartbeatAtMs = now;
+            ack?.({ ok: true, code: room.code, peerId: room.hostPeerId });
+        });
+
+        channel.on('p2p_mark_connected', (data: any, ack?: (response: any) => void) => {
+            const code = sanitizeP2PCode(data?.code);
+            const room = code ? this.p2pRoomsByCode.get(code) : undefined;
+            if (!room) {
+                ack?.({ ok: false, error: 'room_not_found' });
+                return;
+            }
+            const isHost = room.hostPlayerId === playerId;
+            const isReservedJoiner = room.reservedJoinerId === playerId;
+            if (!isHost && !isReservedJoiner) {
+                ack?.({ ok: false, error: 'forbidden' });
+                return;
+            }
+            this.p2pRoomsByCode.delete(code);
+            this.p2pCodeByHostPlayer.delete(room.hostPlayerId);
+            ack?.({ ok: true });
+        });
+
+        channel.on('p2p_release_room', (data: any, ack?: (response: any) => void) => {
+            const requestedCode = sanitizeP2PCode(data?.code);
+            const hostCode = this.p2pCodeByHostPlayer.get(playerId);
+            const code = requestedCode || hostCode || '';
+            const room = code ? this.p2pRoomsByCode.get(code) : undefined;
+            if (room && room.hostPlayerId === playerId) {
+                this.p2pRoomsByCode.delete(code);
+                this.p2pCodeByHostPlayer.delete(playerId);
+            }
+            ack?.({ ok: true });
+        });
+
         channel.on('disconnect', (reason: string, details?: any) => {
             const match = this.matchmaker.getMatchForPlayer(playerId as any);
             const lobbyState = this.matchmaker.getLobbyState(playerId as any);
             console.warn('GameServer: Player socket disconnect', {
                 playerId,
                 reason,
-                transport: (channel as any).conn?.transport?.name,
+                transport: connectionMeta.transport,
                 connected: channel.connected,
-                recovered: (channel as any).recovered === true,
+                recovered: connectionMeta.recovered,
                 matchId: match?.id,
                 lobbyStatus: (lobbyState as any)?.status,
                 details: summarizeDisconnectDetails(details),
@@ -535,6 +656,10 @@ export class GameServer {
         // Handle matchmaking disconnect
         const disbandedMatch = this.matchmaker.handlePlayerDisconnect(playerId as any);
         if (disbandedMatch) {
+            this.preRoundByMatchId.delete(disbandedMatch.id);
+            for (const id of disbandedMatch.players) {
+                this.matchByPlayerId.delete(id);
+            }
             // Notify opponent
             const opponentId = disbandedMatch.players.find(p => p !== playerId);
             if (opponentId) {
@@ -553,7 +678,16 @@ export class GameServer {
 
         // Remove from channels
         this.playerChannels.delete(playerId);
+        this.releaseP2PRoomForPlayer(playerId);
         this.latestClientPoses.delete(playerId);
+        this.matchByPlayerId.delete(playerId);
+        for (const [matchId, state] of this.preRoundByMatchId.entries()) {
+            state.loadedPlayers.delete(playerId);
+            state.players = state.players.filter((id) => id !== playerId);
+            if (state.players.length === 0) {
+                this.preRoundByMatchId.delete(matchId);
+            }
+        }
 
         // Remove from broadcaster
         this.stateBroadcaster.removeClient(playerId);
@@ -764,6 +898,18 @@ export class GameServer {
                     }
                 });
 
+                this.preRoundByMatchId.set(match.id, {
+                    players: [...match.players],
+                    loadedPlayers: new Set(),
+                    started: false,
+                    durationSec: PRE_ROUND_COUNTDOWN_SEC,
+                    endTick: null,
+                    endedBroadcast: false,
+                });
+                for (const playerId of match.players as string[]) {
+                    this.matchByPlayerId.set(playerId, match.id);
+                }
+
                 // Notify each player with their spawn position and opponent info
                 match.players.forEach((playerId: string) => {
                     const channel = this.playerChannels.get(playerId);
@@ -797,23 +943,27 @@ export class GameServer {
                 this.handleClientMessage(playerId, msg);
                 return;
             }
-            const { type, payload } = parseClientMessage(data);
+            const { type, payload } = unwrapBinaryMessage(data);
 
             switch (type) {
-                case ClientMessageType.Input:
+                case BinaryMessageType.Input:
                     this.handleInput(playerId, payload);
                     break;
 
-                case ClientMessageType.InputBatch:
+                case BinaryMessageType.InputBatch:
                     this.handleInputBatch(playerId, payload);
                     break;
 
-                case ClientMessageType.Ack:
+                case BinaryMessageType.InputAck:
                     this.handleAck(playerId, payload);
                     break;
 
-                case ClientMessageType.Ping:
+                case BinaryMessageType.Ping:
                     this.handlePing(playerId, payload);
+                    break;
+
+                case BinaryMessageType.ClientEvent:
+                    this.handleClientMessage(playerId, deserializeClientMessage(payload));
                     break;
 
                 default:
@@ -833,12 +983,58 @@ export class GameServer {
                     origin: message.origin,
                     dir: message.dir,
                     time: message.time,
-                    weaponId: message.weaponId,
+                    ...(message.weaponId ? { weaponId: message.weaponId } : {}),
                 });
+                break;
+            }
+            case 'map_loaded': {
+                this.handleMapLoaded(playerId);
+                break;
+            }
+            case 'select_character': {
+                const characterModelId = String(message.characterModelId ?? '').toLowerCase();
+                if (!CHARACTER_MODELS.includes(characterModelId as (typeof CHARACTER_MODELS)[number])) {
+                    break;
+                }
+                this.simulationLoop.setCharacterModelForPlayer(playerId, characterModelId);
+                const matchId = this.matchByPlayerId.get(playerId);
+                if (!matchId) break;
+                const state = this.preRoundByMatchId.get(matchId);
+                if (!state) break;
+                for (const id of state.players) {
+                    const channel = this.playerChannels.get(id);
+                    channel?.emit('character_selected', { playerId, characterModelId });
+                }
                 break;
             }
             default:
                 break;
+        }
+    }
+
+    private handleMapLoaded(playerId: string): void {
+        const matchId = this.matchByPlayerId.get(playerId);
+        if (!matchId) return;
+        const state = this.preRoundByMatchId.get(matchId);
+        if (!state || state.started) return;
+        state.loadedPlayers.add(playerId);
+        if (state.loadedPlayers.size < state.players.length) {
+            return;
+        }
+
+        const endTick = this.simulationLoop.setInputLockForPlayers(state.players, state.durationSec);
+        state.started = true;
+        state.endTick = endTick;
+        state.endedBroadcast = false;
+
+        for (const id of state.players) {
+            const channel = this.playerChannels.get(id);
+            if (!channel) continue;
+            channel.emit('preround_start', {
+                durationSec: state.durationSec,
+                endTick,
+                availableCharacterModelIds: [...CHARACTER_MODELS],
+            });
         }
     }
 
@@ -879,13 +1075,12 @@ export class GameServer {
         const view = new DataView(data);
         const clientTime = view.getFloat64(0, true);
 
-        const pong = new ArrayBuffer(17);
+        const pong = new ArrayBuffer(16);
         const pongView = new DataView(pong);
-        pongView.setUint8(0, MessageType.Pong);
-        pongView.setFloat64(1, clientTime, true);
-        pongView.setFloat64(9, Date.now(), true);
+        pongView.setFloat64(0, clientTime, true);
+        pongView.setFloat64(8, Date.now(), true);
 
-        channel.emit('bin', pong);
+        channel.emit('bin', wrapBinaryMessage(BinaryMessageType.Pong, pong));
     }
 
     /**
@@ -898,6 +1093,9 @@ export class GameServer {
         // Apply client-authoritative poses (demo mode)
         if (CLIENT_POSE_AUTHORITY) {
             for (const [playerId, pose] of this.latestClientPoses.entries()) {
+                if (this.simulationLoop.isInputLockedForPlayer(playerId)) {
+                    continue;
+                }
                 const entity = this.simulationLoop.getEntityByPlayerId(playerId);
                 if (!entity) continue;
                 entity.position = { x: pose.position.x, y: pose.position.y, z: pose.position.z };
@@ -912,6 +1110,22 @@ export class GameServer {
                 if (pose.isGrounded !== undefined) {
                     entity.isGrounded = pose.isGrounded;
                 }
+            }
+        }
+
+        const nowMs = Date.now();
+        if (nowMs - this.lastP2PRoomCleanupAtMs >= P2P_ROOM_CLEANUP_INTERVAL_MS) {
+            this.cleanupStaleP2PRooms(nowMs);
+            this.lastP2PRoomCleanupAtMs = nowMs;
+        }
+
+        for (const state of this.preRoundByMatchId.values()) {
+            if (!state.started || state.endedBroadcast || state.endTick === null) continue;
+            if (currentTick < state.endTick) continue;
+            state.endedBroadcast = true;
+            for (const playerId of state.players) {
+                const channel = this.playerChannels.get(playerId);
+                channel?.emit('preround_end', {});
             }
         }
 
@@ -960,6 +1174,12 @@ export class GameServer {
             this.lastAcceptedPoses.clear();
             const winnerId = message.winnerId;
             const match = this.matchmaker.getMatchForPlayer(winnerId as any);
+            if (match) {
+                this.preRoundByMatchId.delete(match.id);
+                for (const playerId of match.players) {
+                    this.matchByPlayerId.delete(playerId);
+                }
+            }
             if (match && match.ruleset === 'wager' && match.wagerAmountSol && !this.wagerPayouts.has(match.id)) {
                 this.wagerPayouts.add(match.id);
                 const winnerWallet = match.walletKeys[winnerId];
@@ -1016,7 +1236,7 @@ export class GameServer {
                         scores,
                         targetScore: 10,
                     };
-                    const endData = serializeServerMessage(endMsg);
+                    const endData = wrapBinaryMessage(BinaryMessageType.ServerEvent, serializeServerMessage(endMsg));
                     for (const channel of this.playerChannels.values()) {
                         channel.emit('bin', endData);
                     }
@@ -1025,23 +1245,10 @@ export class GameServer {
             }
         }
 
-        const data = serializeServerMessage(message);
+        const data = wrapBinaryMessage(BinaryMessageType.ServerEvent, serializeServerMessage(message));
         for (const channel of this.playerChannels.values()) {
             channel.emit('bin', data);
         }
-    }
-
-    /**
-     * Serialize data with message type header.
-     */
-    private serializeWithType(type: number, snapshot: any): ArrayBuffer {
-        const { serializeSnapshot } = require('@snapshot/shared/simulation');
-        const data = serializeSnapshot(snapshot);
-        const wrapped = new ArrayBuffer(1 + data.byteLength);
-        const view = new Uint8Array(wrapped);
-        view[0] = type;
-        view.set(new Uint8Array(data), 1);
-        return wrapped;
     }
 
     /**
@@ -1079,6 +1286,40 @@ export class GameServer {
      */
     get playerCount(): number {
         return this.playerChannels.size;
+    }
+
+    private releaseP2PRoomForPlayer(playerId: string): void {
+        const hostCode = this.p2pCodeByHostPlayer.get(playerId);
+        if (hostCode) {
+            this.p2pCodeByHostPlayer.delete(playerId);
+            this.p2pRoomsByCode.delete(hostCode);
+        }
+        for (const room of this.p2pRoomsByCode.values()) {
+            if (room.reservedJoinerId === playerId) {
+                room.reservedJoinerId = null;
+                room.reservationAtMs = null;
+            }
+        }
+    }
+
+    private cleanupStaleP2PRooms(nowMs: number): void {
+        for (const [code, room] of this.p2pRoomsByCode.entries()) {
+            const hostChannel = this.playerChannels.get(room.hostPlayerId);
+            const hostDisconnected = !hostChannel || !hostChannel.connected;
+            const heartbeatExpired = nowMs - room.lastHeartbeatAtMs > P2P_ROOM_HEARTBEAT_TTL_MS;
+            if (hostDisconnected || heartbeatExpired) {
+                this.p2pRoomsByCode.delete(code);
+                this.p2pCodeByHostPlayer.delete(room.hostPlayerId);
+                continue;
+            }
+            if (room.reservedJoinerId && room.reservationAtMs !== null) {
+                const reservationExpired = nowMs - room.reservationAtMs > P2P_RESERVATION_TTL_MS;
+                if (reservationExpired) {
+                    room.reservedJoinerId = null;
+                    room.reservationAtMs = null;
+                }
+            }
+        }
     }
 }
 

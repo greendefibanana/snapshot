@@ -57,6 +57,56 @@ const styles = {
         border: '1px solid rgba(139,92,246,0.6)',
         color: '#e9d5ff',
     },
+    preRoundOverlay: {
+        position: 'absolute' as const,
+        top: 76,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        minWidth: 420,
+        maxWidth: '90vw',
+        borderRadius: 12,
+        padding: '14px 16px',
+        background: 'rgba(8,12,22,0.9)',
+        border: '1px solid rgba(255,255,255,0.18)',
+        boxShadow: '0 10px 30px rgba(0,0,0,0.35)',
+        pointerEvents: 'auto' as const,
+    },
+    preRoundTitle: {
+        fontSize: 13,
+        fontWeight: 800,
+        textTransform: 'uppercase' as const,
+        letterSpacing: '0.6px',
+        color: '#e2e8f0',
+        marginBottom: 8,
+    },
+    preRoundCountdown: {
+        fontSize: 22,
+        fontWeight: 900,
+        color: '#fde68a',
+        marginBottom: 10,
+    },
+    characterRow: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+        gap: 8,
+    },
+    characterBtn: {
+        height: 38,
+        borderRadius: 8,
+        border: '1px solid rgba(255,255,255,0.24)',
+        background: 'rgba(255,255,255,0.06)',
+        color: '#e5e7eb',
+        fontSize: 12,
+        fontWeight: 700,
+        textTransform: 'uppercase' as const,
+        letterSpacing: '0.4px',
+        cursor: 'pointer',
+    },
+    characterBtnSelected: {
+        border: '1px solid rgba(250,204,21,0.8)',
+        background: 'rgba(250,204,21,0.16)',
+        color: '#fef9c3',
+    },
 
     // Bottom left - Health/Shield
     healthContainer: {
@@ -353,6 +403,10 @@ export const HUD: React.FC<HUDProps> = ({ matchMode, matchRuleset }) => {
     const [endCountdown, setEndCountdown] = useState<number | null>(null);
     const [toast, setToast] = useState<{ message: string; severity: 'info' | 'error' | 'success' | 'warning' } | null>(null);
     const localPlayerId = bridge.getLocalPlayerId?.();
+    const characterLabel = (id: string): string => {
+        if (!id) return 'Unknown';
+        return id.charAt(0).toUpperCase() + id.slice(1);
+    };
 
     // Subscribe to game state updates
     useEffect(() => {
@@ -400,6 +454,13 @@ export const HUD: React.FC<HUDProps> = ({ matchMode, matchRuleset }) => {
         return () => window.clearInterval(interval);
     }, [state.isGameOver]);
 
+    useEffect(() => {
+        if (!state.preRoundActive) return;
+        setToast({ message: 'Select your character', severity: 'info' });
+        const timeout = window.setTimeout(() => setToast(null), 3000);
+        return () => window.clearTimeout(timeout);
+    }, [state.preRoundActive]);
+
     // Format time
     const formatTime = useCallback((seconds: number): string => {
         const mins = Math.floor(seconds / 60);
@@ -416,6 +477,28 @@ export const HUD: React.FC<HUDProps> = ({ matchMode, matchRuleset }) => {
 
     return (
         <div style={styles.container}>
+            {state.preRoundActive && (
+                <div style={styles.preRoundOverlay}>
+                    <div style={styles.preRoundTitle}>Character Select</div>
+                    <div style={styles.preRoundCountdown}>
+                        {state.preRoundRemainingSec}s until round start
+                    </div>
+                    <div style={styles.characterRow}>
+                        {state.availableCharacterModelIds.map((modelId) => (
+                            <button
+                                key={modelId}
+                                style={{
+                                    ...styles.characterBtn,
+                                    ...(state.selectedCharacterModelId === modelId ? styles.characterBtnSelected : {}),
+                                }}
+                                onClick={() => bridge.sendToGame({ type: 'select_character', characterModelId: modelId })}
+                            >
+                                {characterLabel(modelId)}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
             {toast && (
                 <div
                     style={{

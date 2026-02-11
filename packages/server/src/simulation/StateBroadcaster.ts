@@ -5,13 +5,12 @@
  * Sends full snapshots periodically and deltas between.
  */
 
-import type { Socket } from 'socket.io';
+import { BinaryMessageType, wrapBinaryMessage } from '@snapshot/shared';
 import {
     type Tick,
     type Snapshot,
     type SnapshotDelta,
     type InputAck,
-    TICK_RATE,
     FULL_SNAPSHOT_INTERVAL,
     DELTA_INTERVAL,
     tick,
@@ -21,6 +20,7 @@ import {
     serializeDelta,
     serializeInputAck,
 } from '@snapshot/shared/simulation';
+import type { ServerTransportChannel } from '../networking/ServerTransport.js';
 
 // =============================================================================
 // TYPES
@@ -33,8 +33,8 @@ export interface ConnectedClient {
     /** Player ID in game */
     playerId: string;
 
-    /** Socket.io channel */
-    channel: Socket;
+    /** Transport channel */
+    channel: ServerTransportChannel;
 
     /** Last tick client acknowledged receiving */
     lastAckedTick: Tick;
@@ -62,32 +62,6 @@ export interface StateBroadcasterConfig {
     /** Custom serialization (for testing) */
     serializeSnapshot?: (snapshot: Snapshot) => ArrayBuffer;
     serializeDelta?: (delta: SnapshotDelta) => ArrayBuffer;
-}
-
-// =============================================================================
-// MESSAGE TYPES
-// =============================================================================
-
-/**
- * Message type identifiers.
- */
-export const MessageType = {
-    Snapshot: 0x01,
-    Delta: 0x02,
-    InputAck: 0x03,
-    Ping: 0x04,
-    Pong: 0x05,
-} as const;
-
-/**
- * Wrap data with message type header.
- */
-function wrapMessage(type: number, data: ArrayBuffer): ArrayBuffer {
-    const wrapped = new ArrayBuffer(1 + data.byteLength);
-    const view = new Uint8Array(wrapped);
-    view[0] = type;
-    view.set(new Uint8Array(data), 1);
-    return wrapped;
 }
 
 // =============================================================================
@@ -197,7 +171,7 @@ export class StateBroadcaster {
         if (this.clients.size === 0) return;
 
         const data = this.config.serializeSnapshot(snapshot);
-        const message = wrapMessage(MessageType.Snapshot, data);
+        const message = wrapBinaryMessage(BinaryMessageType.Snapshot, data);
 
         for (const client of this.clients.values()) {
             this.sendToClient(client, message);
@@ -235,7 +209,7 @@ export class StateBroadcaster {
             return;
         }
 
-        const message = wrapMessage(MessageType.Delta, data);
+        const message = wrapBinaryMessage(BinaryMessageType.Delta, data);
 
         for (const client of this.clients.values()) {
             // Check if client has the base snapshot
@@ -247,7 +221,7 @@ export class StateBroadcaster {
                 // and wait for ack to avoid flooding snapshots every delta tick.
                 if (client.lastSentFullSnapshotTick < this.lastFullSnapshotTick) {
                     const fullData = this.config.serializeSnapshot(snapshot);
-                    const fullMessage = wrapMessage(MessageType.Snapshot, fullData);
+                    const fullMessage = wrapBinaryMessage(BinaryMessageType.Snapshot, fullData);
                     this.sendToClient(client, fullMessage);
                     client.lastSentFullSnapshotTick = this.lastFullSnapshotTick;
                     client.lastSentSnapshotTick = snapshot.tick;
@@ -270,7 +244,7 @@ export class StateBroadcaster {
         };
 
         const data = serializeInputAck(ack);
-        const message = wrapMessage(MessageType.InputAck, data);
+        const message = wrapBinaryMessage(BinaryMessageType.InputAck, data);
 
         this.sendToClient(client, message);
         client.lastProcessedInputSeq = lastSeq;

@@ -36,6 +36,7 @@ export interface RendererConfig {
 
 export interface EntityVisual {
     mesh: THREE.Object3D;
+    characterModelId?: string;
     mixer?: THREE.AnimationMixer;
     outline?: THREE.LineSegments;
     attachments?: {
@@ -318,7 +319,8 @@ export class GameRenderer {
     createPlayerVisual(
         entityId: EntityId,
         _species: Species,
-        _teamId: number
+        _teamId: number,
+        characterModelId: string = 'assasin'
     ): void {
         if (this.entityVisuals.has(entityId as any)) {
             return;
@@ -330,6 +332,7 @@ export class GameRenderer {
 
         const visual: EntityVisual = {
             mesh: group,
+            characterModelId,
             aimState: { isAiming: false, locomotionAnim: 'idle' },
             aimOverlay: { active: false, animationName: 'Pistol Walk', weight: 0.85 },
         };
@@ -341,7 +344,7 @@ export class GameRenderer {
 
         // Load Character model
         const loader = new GLTFLoader();
-        loader.load('/models/characters/Assasin.glb', (gltf) => {
+        loader.load(this.getCharacterModelPath(characterModelId), (gltf) => {
             const model = gltf.scene;
             console.log('Loaded character model', model);
             console.log('Available animations:', gltf.animations.map(a => a.name));
@@ -575,8 +578,12 @@ export class GameRenderer {
                 console.warn('Socket_Righthand not found in character model');
             }
         }, undefined, (error) => {
-            console.error('Failed to load character.glb:', error);
+            console.error(`Failed to load ${characterModelId} character model:`, error);
         });
+    }
+
+    getEntityCharacterModelId(entityId: EntityId): string | null {
+        return this.entityVisuals.get(entityId)?.characterModelId ?? null;
     }
 
     /**
@@ -629,7 +636,19 @@ export class GameRenderer {
         const visual = this.entityVisuals.get(entityId);
         if (!visual) return;
 
-        this.scene.remove(visual.mesh);
+        // Visuals are parented under networkWorldRoot, so remove from actual parent.
+        if (visual.mesh.parent) {
+            visual.mesh.parent.remove(visual.mesh);
+        } else {
+            this.scene.remove(visual.mesh);
+        }
+        if (visual.attachments?.gunHolder) {
+            if (visual.attachments.gunHolder.parent) {
+                visual.attachments.gunHolder.parent.remove(visual.attachments.gunHolder);
+            } else {
+                this.scene.remove(visual.attachments.gunHolder);
+            }
+        }
         this.entityVisuals.delete(entityId);
         this.minimap.removeEntityMarker(entityId as any);
     }
@@ -1219,6 +1238,20 @@ export class GameRenderer {
         if (teamId === 1) return 0x3498db;
         if (teamId === 2) return 0xe74c3c;
         return 0x95a5a6;
+    }
+
+    private getCharacterModelPath(characterModelId: string): string {
+        switch (String(characterModelId).toLowerCase()) {
+            case 'grizzly':
+                return '/models/characters/grizzly.glb';
+            case 'kodiak':
+                return '/models/characters/Kodiak.glb';
+            case 'panda':
+                return '/models/characters/Panda.glb';
+            case 'assasin':
+            default:
+                return '/models/characters/Assasin.glb';
+        }
     }
 
     /**

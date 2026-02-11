@@ -54,7 +54,7 @@ The server binds to `0.0.0.0` and uses `PORT` (default `10000`).
 
 - Production default: same-origin Socket.io connection (no hardcoded host).
 - Optional override: set `VITE_SERVER_URL` (for split frontend/backend deployments).
-- Optional dev override: set `VITE_SERVER_PORT` (defaults to `3000` in dev only).
+- Optional dev override: set `VITE_SERVER_PORT` (defaults to `10000` in dev only).
 
 ## Render Deployment
 

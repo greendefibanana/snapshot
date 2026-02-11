@@ -9,6 +9,7 @@
 
 import type {
     EntityId,
+    PlayerId,
     TeamId,
     GameEvent,
     Vector3,
@@ -107,6 +108,13 @@ export interface UIGameState {
 
     /** Winner name/id */
     winnerName: string | null;
+
+    /** Pre-round lock state */
+    preRoundActive: boolean;
+    preRoundRemainingSec: number;
+    preRoundDurationSec: number;
+    availableCharacterModelIds: string[];
+    selectedCharacterModelId: string;
 }
 
 export interface KillFeedEntry {
@@ -145,6 +153,7 @@ export type UIToGameEvent =
     | { type: 'resume_game' }
     | { type: 'quit_match' }
     | { type: 'join_queue'; mode: string; ruleset: string; wagerAmountSol?: number }
+    | { type: 'select_character'; characterModelId: string }
     | { type: 'wager_locked'; matchId: string }
     | { type: 'leave_queue' }
     | {
@@ -186,6 +195,10 @@ export class GameBridge {
     private pendingPlayerDeaths: Map<PlayerId, PlayerId | null> = new Map();
     private lastKillFeedKey: string | null = null;
     private lastKillFeedAt = 0;
+    private preRoundEndTick: Tick | null = null;
+    private preRoundEndTimeMs: number | null = null;
+    private entityCharacterModelIds: Map<EntityId, string> = new Map();
+    private selectedCharacterByPlayerId: Map<PlayerId, string> = new Map();
 
     private static readonly REMOTE_POSE_BUFFER_MAX = 10;
 
@@ -229,6 +242,11 @@ export class GameBridge {
         respawnTimeRemaining: 0,
         isGameOver: false,
         winnerName: null,
+        preRoundActive: false,
+        preRoundRemainingSec: 0,
+        preRoundDurationSec: 10,
+        availableCharacterModelIds: ['assasin', 'grizzly', 'kodiak', 'panda'],
+        selectedCharacterModelId: 'assasin',
     };
     private lobbyState: LobbyState | null = null;
 
@@ -251,6 +269,15 @@ export class GameBridge {
      */
     getEntityIdForPlayerId(playerId: PlayerId): EntityId | null {
         return this.playerIdToEntityId.get(playerId) ?? null;
+    }
+
+    registerPlayerEntity(playerId: PlayerId, entityId: EntityId, characterModelId: string = 'assasin'): void {
+        this.playerIdToEntityId.set(playerId, entityId);
+        this.entityCharacterModelIds.set(entityId, characterModelId);
+    }
+
+    getEntityCharacterModelId(entityId: EntityId): string | null {
+        return this.entityCharacterModelIds.get(entityId) ?? null;
     }
 
     getLocalPlayerId(): PlayerId | null {
@@ -412,6 +439,10 @@ export class GameBridge {
         this.remotePoseBuffers.clear();
         this.remoteGroundedByPlayerId.clear();
         this.playerIdToEntityId.clear();
+        this.entityCharacterModelIds.clear();
+        this.selectedCharacterByPlayerId.clear();
+        this.preRoundEndTick = null;
+        this.preRoundEndTimeMs = null;
         this.lastSnapshotTick = null;
         this.lastSnapshotTimeMs = null;
         this.lastInputAck = null;
@@ -482,10 +513,20 @@ export class GameBridge {
         this.remotePoseBuffers.clear();
         this.remoteGroundedByPlayerId.clear();
         this.playerIdToEntityId.clear();
+        this.entityCharacterModelIds.clear();
+        this.selectedCharacterByPlayerId.clear();
         this.lastSnapshotTick = null;
         this.lastSnapshotTimeMs = null;
         this.lastInputAck = null;
-        this.updateState({ isRunning: true });
+        this.preRoundEndTick = null;
+        this.preRoundEndTimeMs = null;
+        this.updateState({
+            isRunning: true,
+            preRoundActive: false,
+            preRoundRemainingSec: 0,
+            preRoundDurationSec: 10,
+            availableCharacterModelIds: ['assasin', 'grizzly', 'kodiak', 'panda'],
+        });
         this.emitToUI({ type: 'match_start', ...data });
     }
 
@@ -501,6 +542,10 @@ export class GameBridge {
         this.remotePlayerRootsByPlayerId.clear();
         this.remotePoses.clear();
         this.lastServerPosByPlayerId.clear();
+        this.entityCharacterModelIds.clear();
+        this.selectedCharacterByPlayerId.clear();
+        this.preRoundEndTick = null;
+        this.preRoundEndTimeMs = null;
         this.serverCorrectionTarget = null;
         this.serverSelfPos = null;
         this.serverSelfRot = null;
@@ -514,12 +559,50 @@ export class GameBridge {
         this.emitToUI({ type: 'wager_lock', matchId, wagerAmountSol, opponentWallet, lockRole });
     }
 
+    notifyPreRoundStart(data: {
+        durationSec: number;
+        endTick?: number;
+        availableCharacterModelIds?: string[];
+    }): void {
+        this.preRoundEndTick = typeof data.endTick === 'number' ? (data.endTick as Tick) : null;
+        this.preRoundEndTimeMs = performance.now() + (data.durationSec * 1000);
+        this.updateState({
+            preRoundActive: true,
+            preRoundDurationSec: data.durationSec,
+            preRoundRemainingSec: data.durationSec,
+            availableCharacterModelIds: data.availableCharacterModelIds?.length
+                ? data.availableCharacterModelIds
+                : this.currentState.availableCharacterModelIds,
+        });
+    }
+
+    notifyPreRoundEnd(): void {
+        this.preRoundEndTick = null;
+        this.preRoundEndTimeMs = null;
+        this.updateState({
+            preRoundActive: false,
+            preRoundRemainingSec: 0,
+        });
+    }
+
+    notifyCharacterSelected(playerId: PlayerId, characterModelId: string): void {
+        this.selectedCharacterByPlayerId.set(playerId, characterModelId);
+        const entityId = this.playerIdToEntityId.get(playerId);
+        if (entityId !== undefined) {
+            this.entityCharacterModelIds.set(entityId as any, characterModelId);
+        }
+        if (this.localPlayerId && playerId === this.localPlayerId) {
+            this.updateState({ selectedCharacterModelId: characterModelId });
+        }
+    }
+
     /**
      * Process a full world snapshot from server.
      */
     processSnapshot(snapshot: import('@snapshot/shared/simulation').Snapshot): void {
         this.lastSnapshotTick = snapshot.tick;
         this.lastSnapshotTimeMs = performance.now();
+        this.updatePreRoundFromTick(snapshot.tick);
         this.resolveLocalEntityId(snapshot);
 
         // Here we could perform reconciliation if we had a local simulation.
@@ -529,6 +612,13 @@ export class GameBridge {
             const playerId = entity.player?.playerId;
             if (playerId) {
                 this.playerIdToEntityId.set(playerId, entityId as any);
+                if (entity.player?.characterModelId) {
+                    this.selectedCharacterByPlayerId.set(playerId, entity.player.characterModelId);
+                    this.entityCharacterModelIds.set(entityId as any, entity.player.characterModelId);
+                    if (this.localPlayerId && playerId === this.localPlayerId) {
+                        this.updateState({ selectedCharacterModelId: entity.player.characterModelId });
+                    }
+                }
             }
             if (this.localPlayerId && playerId === this.localPlayerId) {
                 if (entity.transform?.position) {
@@ -714,6 +804,7 @@ export class GameBridge {
     processDelta(delta: import('@snapshot/shared/simulation').SnapshotDelta): void {
         this.lastSnapshotTick = delta.targetTick;
         this.lastSnapshotTimeMs = performance.now();
+        this.updatePreRoundFromTick(delta.targetTick);
         for (const removedId of delta.removedEntityIds) {
             this.entityTransforms.delete(removedId as any);
             const playerId = this.getPlayerIdForEntity(removedId as any);
@@ -789,6 +880,35 @@ export class GameBridge {
         }
     }
 
+    private updatePreRoundFromTick(serverTick: Tick): void {
+        if (this.preRoundEndTick === null) return;
+        const ticksLeft = Math.max(0, (this.preRoundEndTick as number) - (serverTick as number));
+        const remainingSec = Math.ceil((ticksLeft * TICK_MS) / 1000);
+        const wasActive = this.currentState.preRoundActive;
+        this.updateState({
+            preRoundActive: ticksLeft > 0,
+            preRoundRemainingSec: remainingSec,
+        });
+        if (wasActive && ticksLeft <= 0) {
+            this.preRoundEndTick = null;
+        }
+    }
+
+    tickLocalPreRound(nowMs: number = performance.now()): void {
+        if (!this.currentState.preRoundActive) return;
+        if (this.preRoundEndTimeMs === null) return;
+        const msLeft = Math.max(0, this.preRoundEndTimeMs - nowMs);
+        const remainingSec = Math.ceil(msLeft / 1000);
+        this.updateState({
+            preRoundRemainingSec: remainingSec,
+            preRoundActive: msLeft > 0,
+        });
+        if (msLeft <= 0) {
+            this.preRoundEndTick = null;
+            this.preRoundEndTimeMs = null;
+        }
+    }
+
     /**
      * Process input ack from server.
      */
@@ -847,6 +967,16 @@ export class GameBridge {
      * Send event from UI to game.
      */
     sendToGame(event: UIToGameEvent): void {
+        if (event.type === 'select_character') {
+            this.updateState({ selectedCharacterModelId: event.characterModelId });
+            if (this.localPlayerId) {
+                this.selectedCharacterByPlayerId.set(this.localPlayerId, event.characterModelId);
+                const localEntityId = this.playerIdToEntityId.get(this.localPlayerId);
+                if (localEntityId !== undefined) {
+                    this.entityCharacterModelIds.set(localEntityId as any, event.characterModelId);
+                }
+            }
+        }
         this.emitToGame(event);
     }
 

@@ -13,7 +13,7 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { ConnectWalletButton } from '../wallet/ConnectWalletButton';
 import { LobbyScreen } from './lobby/LobbyScreen';
-import { getGameClient } from '../networking/GameClient';
+import { getGameClient, type P2PStatus } from '../networking/GameClient';
 import { initializeGame } from '../main';
 import { getUsernameForPublicKey, setUsernameForPublicKey, validateUsername } from '../wallet/username';
 import { wagerMatchSeed } from '@snapshot/shared';
@@ -49,6 +49,7 @@ export const App: React.FC = () => {
     const [wagerError, setWagerError] = useState<string | null>(null);
     const [wagerLoading, setWagerLoading] = useState(false);
     const [currentMatchContext, setCurrentMatchContext] = useState<MatchContext | null>(null);
+    const [p2pStatus, setP2PStatus] = useState<P2PStatus>({ phase: 'idle' });
     const lastAuthRef = useRef<{ address: string; username: string } | null>(null);
 
     // Refs
@@ -63,6 +64,12 @@ export const App: React.FC = () => {
     useEffect(() => {
         console.log('[App] Current state:', appState, 'Connected:', connected);
     }, [appState, connected]);
+
+    useEffect(() => {
+        return client.subscribeToP2PStatus((status) => {
+            setP2PStatus(status);
+        });
+    }, [client]);
 
     // Handle Wallet Connection
     useEffect(() => {
@@ -321,6 +328,12 @@ export const App: React.FC = () => {
                         lockRole: event.lockRole,
                     });
                     break;
+                case 'state_update':
+                    if (event.state && 'isRunning' in event.state && event.state.isRunning === false && appState === 'playing') {
+                        setIsPaused(false);
+                        setAppState('lobby');
+                    }
+                    break;
             }
         });
 
@@ -403,6 +416,23 @@ export const App: React.FC = () => {
         }
     }, [bridge, client]);
 
+    const handleCreateP2PRoom = useCallback(async (): Promise<string> => {
+        return client.createP2PRoom();
+    }, [client]);
+
+    const handleJoinP2PRoom = useCallback(async (code: string): Promise<void> => {
+        await client.joinP2PRoom(code);
+    }, [client]);
+
+    const handleFallbackServer1v1 = useCallback(() => {
+        client.cancelP2P();
+        bridge.sendToGame({
+            type: 'join_queue',
+            mode: '1v1',
+            ruleset: 'casual',
+        });
+    }, [bridge, client]);
+
     // =========================================================================
     // RENDER
     // =========================================================================
@@ -478,7 +508,14 @@ export const App: React.FC = () => {
                 <div style={{ position: 'relative', zIndex: 10, width: '100%', height: '100%' }}>
                     {/* Show LobbyScreen if we have state, otherwise loading */}
                     {lobbyState ? (
-                        <LobbyScreen lobbyState={lobbyState} onStartTraining={handleStartTraining} />
+                        <LobbyScreen
+                            lobbyState={lobbyState}
+                            onStartTraining={handleStartTraining}
+                            onCreateP2PRoom={handleCreateP2PRoom}
+                            onJoinP2PRoom={handleJoinP2PRoom}
+                            onFallbackServer1v1={handleFallbackServer1v1}
+                            p2pStatus={p2pStatus}
+                        />
                     ) : (
                         <div style={styles.overlay}>
                             <h2 style={{ marginBottom: 20 }}>Connecting to Lobby...</h2>

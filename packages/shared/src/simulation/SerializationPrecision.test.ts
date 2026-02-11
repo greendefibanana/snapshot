@@ -80,6 +80,7 @@ describe('Simulation serialization precision', () => {
                         playerId: 'player-precision-test',
                         teamId: 2,
                         isAlive: true,
+                        characterModelId: 'assasin',
                         lastProcessedInputTick: tick(198),
                     },
                     health: {

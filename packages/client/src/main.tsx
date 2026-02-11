@@ -116,6 +116,11 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         console.log('BVH character controller created (pre-collider) at', initialSpawn);
     }
 
+    const client = getGameClient();
+
+    let mapLoadedNotified = false;
+    let localPreRoundStarted = false;
+
     // Create game renderer
     const renderer = createGameRenderer({
         container: canvasContainer,
@@ -133,6 +138,17 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 characterController.setCollider(bvhCollider);
                 console.log('BVH collider attached to character controller');
             }
+            if (!mapLoadedNotified) {
+                mapLoadedNotified = true;
+                client.sendMapLoaded();
+                if (!bridge.getState().isConnected && !localPreRoundStarted) {
+                    localPreRoundStarted = true;
+                    bridge.notifyPreRoundStart({
+                        durationSec: 10,
+                        availableCharacterModelIds: ['assasin', 'grizzly', 'kodiak', 'panda'],
+                    });
+                }
+            }
         }
     });
 
@@ -141,7 +157,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     // Always create a local visual for the controller.
     if (!renderer.hasEntityVisual(LOCAL_VISUAL_ID)) {
         renderer.setMinimapLocalEntityId(LOCAL_VISUAL_ID);
-        renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, 1);
+        renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, 1, bridge.getState().selectedCharacterModelId);
         console.log('Created local player visual');
     }
 
@@ -162,8 +178,6 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     });
     console.log('Shooter camera initialized');
 
-    // Game client (for input sending)
-    const client = getGameClient();
     const audio = new AudioManager({ masterVolume: 1.0, sfxVolume: 0.9 });
 
     // Input tick sending
@@ -177,6 +191,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         lastUpdateMs: number;
         isGrounded?: boolean;
     }>();
+    const remoteAnimHints = new Map<EntityId, { locomotion: string; isSliding: boolean; atMs: number }>();
     const CLIENT_AUTHORITY = false;
     const POSE_SEND_INTERVAL_MS = 33;
     const REMOTE_INTERPOLATION_DELAY_TICKS = 2;
@@ -192,6 +207,21 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             return LOCAL_VISUAL_ID;
         }
         return entityId;
+    };
+
+    const getDesiredCharacterModel = (entityId: EntityId): string =>
+        bridge.getEntityCharacterModelId(entityId) ?? 'assasin';
+
+    const ensureVisual = (entityId: EntityId, teamId: number, desiredModelId: string): void => {
+        const currentModelId = renderer.getEntityCharacterModelId(entityId);
+        if (!renderer.hasEntityVisual(entityId)) {
+            renderer.createPlayerVisual(entityId, Species.Urshari, teamId, desiredModelId);
+            return;
+        }
+        if (currentModelId !== desiredModelId) {
+            renderer.removeEntityVisual(entityId);
+            renderer.createPlayerVisual(entityId, Species.Urshari, teamId, desiredModelId);
+        }
     };
 
     let lastHealth = bridge.getState().health;
@@ -266,6 +296,16 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             return;
         }
 
+        if ((gameEvent as any).type === 'p2p_anim_state') {
+            const visualId = resolveVisualId((gameEvent as any).sourceId as any);
+            remoteAnimHints.set(visualId, {
+                locomotion: String((gameEvent as any).locomotion ?? 'idle'),
+                isSliding: Boolean((gameEvent as any).isSliding),
+                atMs: performance.now(),
+            });
+            return;
+        }
+
         if (gameEvent.type === 'player_died') {
             const visualId = resolveVisualId(gameEvent.entityId as any);
             renderer.playOverrideAnimation(visualId, 'Death', { loop: false, clamp: true });
@@ -318,10 +358,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                     // Ignore local network entity updates for now to avoid snapbacks/dup visuals.
                     break;
                 }
-                if (!renderer.hasEntityVisual(event.entityId)) {
-                    console.log('Game: Creating visual for new entity', event.entityId, 'at', event.position);
-                    renderer.createPlayerVisual(event.entityId, Species.Urshari, 2); // Default to Team 2 for now
-                }
+                ensureVisual(event.entityId, 2, getDesiredCharacterModel(event.entityId));
                 renderer.updateEntityTransform(event.entityId, event.position, event.rotation);
                 break;
         }
@@ -361,6 +398,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         requestAnimationFrame(animate);
 
         const now = performance.now();
+        bridge.tickLocalPreRound(now);
         if (NETDBG) {
             if (!(window as any).__netdbg_last) (window as any).__netdbg_last = 0;
             if (now - (window as any).__netdbg_last > 1000) {
@@ -392,9 +430,10 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         // Safety: ensure local visual exists even if it was dropped.
         if (!renderer.hasEntityVisual(LOCAL_VISUAL_ID)) {
             renderer.setMinimapLocalEntityId(LOCAL_VISUAL_ID);
-            renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, 1);
+            renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, 1, bridge.getState().selectedCharacterModelId);
             console.log('Recreated local player visual');
         }
+        ensureVisual(LOCAL_VISUAL_ID, 1, bridge.getState().selectedCharacterModelId);
 
         // FPS counter
         frameCount++;
@@ -434,19 +473,23 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         }
 
         // Get input state (only when pointer is locked)
-        const movement = input.getMovementInput();
+        const preRoundActive = bridge.getState().preRoundActive;
+        const rawMovement = input.getMovementInput();
+        const movement = preRoundActive
+            ? { forward: false, backward: false, left: false, right: false, jump: false, crouch: false, sprint: false, dodge: false }
+            : rawMovement;
         const movementForController = {
             ...movement,
             left: movement.right,
             right: movement.left,
         };
-        const isSprinting = input.isKeyDown('ShiftLeft') || input.isKeyDown('ShiftRight');
-        const jumpPressed = input.isKeyDown('Space');
-        const isSliding = input.isKeyDown('KeyC');
-        const isAiming = input.isMouseButtonDown(2); // RMB
+        const isSprinting = !preRoundActive && (input.isKeyDown('ShiftLeft') || input.isKeyDown('ShiftRight'));
+        const jumpPressed = !preRoundActive && input.isKeyDown('Space');
+        const isSliding = !preRoundActive && input.isKeyDown('KeyC');
+        const isAiming = !preRoundActive && input.isMouseButtonDown(2); // RMB
         // Detect shooting click (edge) or hold
-        const isShootingDown = input.isMouseButtonDown(0); // LMB
-        const isReloadPressed = input.isActionActive('reload');
+        const isShootingDown = !preRoundActive && input.isMouseButtonDown(0); // LMB
+        const isReloadPressed = !preRoundActive && input.isActionActive('reload');
         if (isShootingDown || isAiming || movement.forward || movement.backward || movement.left || movement.right || jumpPressed) {
             audio.unlock();
         }
@@ -496,11 +539,22 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 const inputFrame = {
                     ...rawInput,
                     movement: {
-                        ...rawInput.movement,
-                        left: rawInput.movement.right,
-                        right: rawInput.movement.left,
+                        forward: preRoundActive ? false : rawInput.movement.forward,
+                        backward: preRoundActive ? false : rawInput.movement.backward,
+                        left: preRoundActive ? false : rawInput.movement.right,
+                        right: preRoundActive ? false : rawInput.movement.left,
+                        jump: preRoundActive ? false : rawInput.movement.jump,
+                        crouch: preRoundActive ? false : rawInput.movement.crouch,
+                        sprint: preRoundActive ? false : rawInput.movement.sprint,
+                        dodge: preRoundActive ? false : rawInput.movement.dodge,
                     },
                     aim: { ...aim, yaw: serverYaw },
+                    primaryFire: preRoundActive ? false : rawInput.primaryFire,
+                    secondaryFire: preRoundActive ? false : rawInput.secondaryFire,
+                    reload: preRoundActive ? false : rawInput.reload,
+                    tactical: preRoundActive ? false : rawInput.tactical,
+                    ultimate: preRoundActive ? false : rawInput.ultimate,
+                    interact: preRoundActive ? false : rawInput.interact,
                 };
                 client.sendInput(inputFrame);
             }
@@ -512,7 +566,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         // Update BVH character controller
         if (characterController) {
             // Update controller with input
-            const lockInput = liveState.isGameOver;
+            const lockInput = liveState.isGameOver || liveState.preRoundActive;
             characterController.update(deltaTime, {
                 forward: lockInput ? false : movementForController.forward,
                 backward: lockInput ? false : movementForController.backward,
@@ -594,20 +648,6 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             );
             bridge.updateLocalRenderPos({ x: renderPos.x, y: renderPos.y, z: renderPos.z });
 
-            // Send BVH pose to server at 20Hz for validation
-            if (now - lastPoseSentMs >= POSE_SEND_INTERVAL_MS && !liveState.isGameOver) {
-                const pos = characterController.copyPosition(tmpLocalPos);
-                const vel = characterController.copyVelocity(tmpLocalVel);
-                client.sendPose({
-                    position: { x: pos.x, y: pos.y, z: pos.z },
-                    velocity: { x: vel.x, y: vel.y, z: vel.z },
-                    rotation: { x: playerQuat.x, y: playerQuat.y, z: playerQuat.z, w: playerQuat.w },
-                    isGrounded: characterController.isGrounded,
-                    timeMs: now,
-                });
-                lastPoseSentMs = now;
-            }
-
             // Update animations based on movement
             const isMoving = movement.forward || movement.backward || movement.left || movement.right;
             const isGrounded = characterController.isGrounded;
@@ -623,6 +663,24 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 targetAnim = 'Jump Loop';
             } else if (isMoving) {
                 targetAnim = isSprinting ? 'Sprint' : 'Walking female';
+            }
+
+            // Send BVH pose + animation state for P2P remote animation sync.
+            if (now - lastPoseSentMs >= POSE_SEND_INTERVAL_MS && !liveState.isGameOver) {
+                const pos = characterController.copyPosition(tmpLocalPos);
+                const vel = characterController.copyVelocity(tmpLocalVel);
+                client.sendPose({
+                    position: { x: pos.x, y: pos.y, z: pos.z },
+                    velocity: { x: vel.x, y: vel.y, z: vel.z },
+                    rotation: { x: playerQuat.x, y: playerQuat.y, z: playerQuat.z, w: playerQuat.w },
+                    isGrounded: characterController.isGrounded,
+                    timeMs: now,
+                    animation: {
+                        locomotion: targetAnim,
+                        isSliding: isControllerSliding,
+                    },
+                });
+                lastPoseSentMs = now;
             }
 
             // Sync Aim State to Renderer
@@ -707,10 +765,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             if (deadEntities.has(entityId)) {
                 continue;
             }
-            if (!renderer.hasEntityVisual(entityId)) {
-                console.log('Game: Creating visual for new entity', entityId, 'at', pose.position);
-                renderer.createPlayerVisual(entityId, Species.Urshari, 2);
-            }
+            ensureVisual(entityId, 2, getDesiredCharacterModel(entityId));
 
             const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
             const rotation = new THREE.Quaternion(
@@ -752,6 +807,10 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 } else if (speed > 0.2) {
                     targetAnim = speed > 6 ? 'Sprint' : 'Walking female';
                 }
+            }
+            const hint = remoteAnimHints.get(entityId);
+            if (hint && nowMs - hint.atMs <= 250) {
+                targetAnim = hint.isSliding ? 'Running Slide' : hint.locomotion;
             }
 
             renderer.setAnimation(entityId, targetAnim);

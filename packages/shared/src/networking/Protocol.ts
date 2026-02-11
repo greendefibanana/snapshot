@@ -27,6 +27,8 @@ import type { WorldSnapshot } from '../ecs/World.js';
 export type ClientMessage =
     | ClientInputMessage
     | ClientShootMessage
+    | ClientMapLoadedMessage
+    | ClientSelectCharacterMessage
     | ClientAbilityMessage
     | ClientWeaponSwitchMessage
     | ClientInteractMessage
@@ -49,6 +51,15 @@ export interface ClientShootMessage {
     dir: Vector3;
     time: number;
     weaponId?: string;
+}
+
+export interface ClientMapLoadedMessage {
+    type: 'map_loaded';
+}
+
+export interface ClientSelectCharacterMessage {
+    type: 'select_character';
+    characterModelId: string;
 }
 
 export interface ClientAbilityMessage {

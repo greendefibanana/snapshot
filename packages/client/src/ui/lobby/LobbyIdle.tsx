@@ -25,12 +25,23 @@ export interface ModeCardData {
     readonly description: string;
     readonly ruleset: Ruleset;
     readonly access: AccessType;
-    readonly accent?: 'purple' | 'green';
+    readonly accent?: 'purple' | 'green' | 'orange';
+    readonly p2pTag?: string;
+    readonly comingSoon?: boolean;
+    readonly optimizingForProduction?: boolean;
 }
 
 export interface LobbyIdleProps {
     readonly modes: readonly ModeCardData[];
     readonly onStartTraining?: () => void;
+    readonly onCreateP2PRoom?: () => Promise<string>;
+    readonly onJoinP2PRoom?: (code: string) => Promise<void>;
+    readonly onFallbackServer1v1?: () => void;
+    readonly p2pStatus?: {
+        phase: 'idle' | 'hosting' | 'connecting' | 'connected' | 'failed';
+        code?: string;
+        error?: string;
+    };
 }
 
 // =============================================================================
@@ -44,22 +55,38 @@ interface ModeCardProps {
 
 const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
     const bridge = getGameBridge();
-    const isComingSoon = data.mode === '4v4';
+    const isUnavailable = data.mode === '4v4' || data.comingSoon === true || data.optimizingForProduction === true;
     const accent = data.accent ?? 'purple';
-    const accentBorder = accent === 'green' ? 'rgba(34, 197, 94, 0.45)' : 'rgba(139, 92, 246, 0.3)';
-    const accentBorderHover = accent === 'green' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(139, 92, 246, 0.8)';
-    const accentShadow = accent === 'green' ? '0 8px 24px rgba(34, 197, 94, 0.3)' : '0 8px 24px rgba(139, 92, 246, 0.3)';
-    const accentTitle = accent === 'green' ? '#bbf7d0' : '#e9d5ff';
-    const accentDesc = accent === 'green' ? '#86efac' : '#c4b5fd';
+    const accentBorder = accent === 'green'
+        ? 'rgba(34, 197, 94, 0.45)'
+        : accent === 'orange'
+            ? 'rgba(249, 115, 22, 0.45)'
+            : 'rgba(139, 92, 246, 0.3)';
+    const accentBorderHover = accent === 'green'
+        ? 'rgba(34, 197, 94, 0.9)'
+        : accent === 'orange'
+            ? 'rgba(249, 115, 22, 0.95)'
+            : 'rgba(139, 92, 246, 0.8)';
+    const accentShadow = accent === 'green'
+        ? '0 8px 24px rgba(34, 197, 94, 0.3)'
+        : accent === 'orange'
+            ? '0 8px 24px rgba(249, 115, 22, 0.35)'
+            : '0 8px 24px rgba(139, 92, 246, 0.3)';
+    const accentTitle = accent === 'green' ? '#bbf7d0' : accent === 'orange' ? '#fed7aa' : '#e9d5ff';
+    const accentDesc = accent === 'green' ? '#86efac' : accent === 'orange' ? '#fdba74' : '#c4b5fd';
     const buttonBase = accent === 'green'
         ? 'linear-gradient(135deg, #22c55e, #16a34a)'
-        : 'linear-gradient(135deg, #8b5cf6, #7c3aed)';
+        : accent === 'orange'
+            ? 'linear-gradient(135deg, #fb923c, #ea580c)'
+            : 'linear-gradient(135deg, #8b5cf6, #7c3aed)';
     const buttonHover = accent === 'green'
         ? 'linear-gradient(135deg, #16a34a, #15803d)'
-        : 'linear-gradient(135deg, #7c3aed, #6d28d9)';
+        : accent === 'orange'
+            ? 'linear-gradient(135deg, #f97316, #c2410c)'
+            : 'linear-gradient(135deg, #7c3aed, #6d28d9)';
 
     const handleClick = () => {
-        if (isComingSoon) return;
+        if (isUnavailable) return;
         console.log('[LobbyIdle] Mode selected:', data.mode, data.ruleset);
         if (onStart) {
             onStart(data);
@@ -80,20 +107,20 @@ const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
                 border: `2px solid ${accentBorder}`,
                 borderRadius: '12px',
                 padding: '24px',
-                cursor: isComingSoon ? 'not-allowed' : 'pointer',
+                cursor: isUnavailable ? 'not-allowed' : 'pointer',
                 transition: 'all 0.3s ease',
                 position: 'relative',
                 overflow: 'hidden',
-                opacity: isComingSoon ? 0.55 : 1,
+                opacity: isUnavailable ? 0.55 : 1,
             }}
             onMouseEnter={(e) => {
-                if (isComingSoon) return;
+                if (isUnavailable) return;
                 e.currentTarget.style.borderColor = accentBorderHover;
                 e.currentTarget.style.transform = 'translateY(-4px)';
                 e.currentTarget.style.boxShadow = accentShadow;
             }}
             onMouseLeave={(e) => {
-                if (isComingSoon) return;
+                if (isUnavailable) return;
                 e.currentTarget.style.borderColor = accentBorder;
                 e.currentTarget.style.transform = 'translateY(0)';
                 e.currentTarget.style.boxShadow = 'none';
@@ -101,6 +128,19 @@ const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
         >
             <h3 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '8px', color: accentTitle }}>
                 {data.label}
+                {data.p2pTag && (
+                    <span style={{
+                        marginLeft: 10,
+                        padding: '3px 8px',
+                        borderRadius: 999,
+                        border: '1px solid rgba(251,146,60,0.55)',
+                        color: '#fdba74',
+                        fontSize: 11,
+                        verticalAlign: 'middle',
+                    }}>
+                        {data.p2pTag}
+                    </span>
+                )}
             </h3>
             <p style={{ color: accentDesc, marginBottom: '20px', fontSize: '14px' }}>
                 {data.description}
@@ -122,7 +162,19 @@ const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
                         WAGER
                     </span>
                 )}
-                {isComingSoon && (
+                {data.optimizingForProduction && (
+                    <span style={{
+                        background: 'linear-gradient(135deg, #0ea5e9, #0369a1)',
+                        padding: '4px 12px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        color: '#fff',
+                    }}>
+                        OPTIMIZING FOR PRODUCTION
+                    </span>
+                )}
+                {(isUnavailable || data.comingSoon) && (
                     <span style={{
                         background: 'linear-gradient(135deg, #22c55e, #16a34a)',
                         padding: '4px 12px',
@@ -150,33 +202,33 @@ const ModeCard: React.FC<ModeCardProps> = ({ data, onStart }) => {
 
             <button
                 onClick={handleClick}
-                disabled={isComingSoon}
+                disabled={isUnavailable}
                 style={{
                     width: '100%',
                     padding: '14px 24px',
                     fontSize: '16px',
                     fontWeight: 700,
-                    background: isComingSoon ? 'rgba(148,163,184,0.3)' : buttonBase,
+                    background: isUnavailable ? 'rgba(148,163,184,0.3)' : buttonBase,
                     border: 'none',
                     borderRadius: '8px',
                     color: '#ffffff',
-                    cursor: isComingSoon ? 'not-allowed' : 'pointer',
+                    cursor: isUnavailable ? 'not-allowed' : 'pointer',
                     transition: 'all 0.2s ease',
                     textTransform: 'uppercase',
                     letterSpacing: '0.5px',
                 }}
                 onMouseEnter={(e) => {
-                    if (isComingSoon) return;
+                    if (isUnavailable) return;
                     e.currentTarget.style.background = buttonHover;
                     e.currentTarget.style.transform = 'scale(1.02)';
                 }}
                 onMouseLeave={(e) => {
-                    if (isComingSoon) return;
+                    if (isUnavailable) return;
                     e.currentTarget.style.background = buttonBase;
                     e.currentTarget.style.transform = 'scale(1)';
                 }}
             >
-                {isComingSoon ? 'COMING SOON' : 'START MATCHMAKING'}
+                {isUnavailable ? 'COMING SOON' : 'START MATCHMAKING'}
             </button>
         </div>
     );
@@ -210,6 +262,15 @@ const DEFAULT_MODES: ModeCardData[] = [
     },
     {
         mode: '1v1',
+        label: '1v1 P2P',
+        description: 'Direct peer-to-peer duel (host-authoritative listen server)',
+        ruleset: 'casual',
+        access: 'public',
+        accent: 'orange',
+        p2pTag: 'P2P multiplayer',
+    },
+    {
+        mode: '1v1',
         label: '1v1 Wager Match',
         description: 'Bet SOL to win',
         ruleset: 'wager',
@@ -218,7 +279,14 @@ const DEFAULT_MODES: ModeCardData[] = [
     },
 ];
 
-export const LobbyIdle: React.FC<LobbyIdleProps> = ({ modes = DEFAULT_MODES, onStartTraining }) => {
+export const LobbyIdle: React.FC<LobbyIdleProps> = ({
+    modes = DEFAULT_MODES,
+    onStartTraining,
+    onCreateP2PRoom,
+    onJoinP2PRoom,
+    onFallbackServer1v1,
+    p2pStatus,
+}) => {
     const bridge = getGameBridge();
     const { connection } = useConnection();
     const { publicKey, connected } = useWallet();
@@ -228,6 +296,12 @@ export const LobbyIdle: React.FC<LobbyIdleProps> = ({ modes = DEFAULT_MODES, onS
     const [balanceSol, setBalanceSol] = useState<number | null>(null);
     const [wagerError, setWagerError] = useState<string | null>(null);
     const [wagerLoading, setWagerLoading] = useState(false);
+    const [p2pOpen, setP2POpen] = useState(false);
+    const [p2pMode, setP2PMode] = useState<'host' | 'join'>('host');
+    const [p2pCode, setP2PCode] = useState('');
+    const [p2pJoinCode, setP2PJoinCode] = useState('');
+    const [p2pError, setP2PError] = useState<string | null>(null);
+    const [p2pLoading, setP2PLoading] = useState(false);
 
     const refreshBalance = useCallback(async () => {
         if (!publicKey) {
@@ -277,6 +351,15 @@ export const LobbyIdle: React.FC<LobbyIdleProps> = ({ modes = DEFAULT_MODES, onS
 
     const modeCards = useMemo(() => modes, [modes]);
 
+    React.useEffect(() => {
+        if (p2pStatus?.phase === 'failed') {
+            setP2PError(p2pStatus.error ?? 'P2P connection failed within 10 seconds.');
+            setP2PLoading(false);
+            setP2PCode(p2pStatus.code ?? '');
+            setP2POpen(true);
+        }
+    }, [p2pStatus]);
+
     return (
         <div style={{
             minHeight: '100vh',
@@ -308,11 +391,19 @@ export const LobbyIdle: React.FC<LobbyIdleProps> = ({ modes = DEFAULT_MODES, onS
             }}>
                 {modeCards.map((mode) => (
                     <ModeCard
-                        key={`${mode.mode}-${mode.ruleset}`}
+                        key={`${mode.mode}-${mode.ruleset}-${mode.label}`}
                         data={mode}
                         onStart={(data) => {
                             if (data.mode === 'training') {
                                 onStartTraining?.();
+                                return;
+                            }
+                            if (data.p2pTag) {
+                                setP2POpen(true);
+                                setP2PError(null);
+                                setP2PCode('');
+                                setP2PJoinCode('');
+                                setP2PMode('host');
                                 return;
                             }
                             if (data.ruleset === 'wager') {
@@ -328,6 +419,219 @@ export const LobbyIdle: React.FC<LobbyIdleProps> = ({ modes = DEFAULT_MODES, onS
                     />
                 ))}
             </div>
+
+            {p2pOpen && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(0,0,0,0.72)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 210,
+                    padding: '20px',
+                }}>
+                    <div style={{
+                        width: 'min(560px, 96vw)',
+                        background: '#140f0a',
+                        border: '1px solid rgba(251,146,60,0.55)',
+                        borderRadius: '16px',
+                        padding: '24px',
+                        color: 'white',
+                    }}>
+                        <h3 style={{ fontSize: '24px', marginBottom: '8px', color: '#fdba74' }}>1v1 P2P</h3>
+                        <p style={{ color: '#fed7aa', marginBottom: '14px' }}>Host creates a join code. Joiner enters code to connect.</p>
+
+                        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+                            <button
+                                onClick={() => setP2PMode('host')}
+                                style={{
+                                    flex: 1,
+                                    padding: '10px 14px',
+                                    borderRadius: 10,
+                                    border: p2pMode === 'host' ? '2px solid #fb923c' : '1px solid rgba(251,146,60,0.4)',
+                                    background: p2pMode === 'host' ? 'rgba(251,146,60,0.2)' : 'rgba(0,0,0,0.25)',
+                                    color: 'white',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                Host Room
+                            </button>
+                            <button
+                                onClick={() => setP2PMode('join')}
+                                style={{
+                                    flex: 1,
+                                    padding: '10px 14px',
+                                    borderRadius: 10,
+                                    border: p2pMode === 'join' ? '2px solid #fb923c' : '1px solid rgba(251,146,60,0.4)',
+                                    background: p2pMode === 'join' ? 'rgba(251,146,60,0.2)' : 'rgba(0,0,0,0.25)',
+                                    color: 'white',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                Join Room
+                            </button>
+                        </div>
+
+                        {p2pMode === 'host' ? (
+                            <div>
+                                {p2pCode ? (
+                                    <div style={{ marginBottom: 14 }}>
+                                        <div style={{ color: '#fdba74', marginBottom: 8, fontSize: 13 }}>Share this join code:</div>
+                                        <div style={{ display: 'flex', gap: 8 }}>
+                                            <input
+                                                readOnly
+                                                value={p2pCode}
+                                                style={{
+                                                    flex: 1,
+                                                    height: 46,
+                                                    borderRadius: 10,
+                                                    border: '1px solid rgba(251,146,60,0.5)',
+                                                    background: '#1f1408',
+                                                    color: '#ffedd5',
+                                                    fontSize: 24,
+                                                    letterSpacing: '3px',
+                                                    textAlign: 'center',
+                                                }}
+                                            />
+                                            <button
+                                                onClick={() => navigator.clipboard.writeText(p2pCode)}
+                                                style={{
+                                                    padding: '0 14px',
+                                                    borderRadius: 10,
+                                                    border: '1px solid rgba(251,146,60,0.5)',
+                                                    background: 'rgba(251,146,60,0.2)',
+                                                    color: '#ffedd5',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                Copy
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={async () => {
+                                            if (!onCreateP2PRoom) return;
+                                            setP2PLoading(true);
+                                            setP2PError(null);
+                                            try {
+                                                const code = await onCreateP2PRoom();
+                                                setP2PCode(code);
+                                            } catch (error: any) {
+                                                setP2PError(error?.message ?? 'Failed to create P2P room.');
+                                            } finally {
+                                                setP2PLoading(false);
+                                            }
+                                        }}
+                                        disabled={p2pLoading}
+                                        style={{
+                                            width: '100%',
+                                            height: 46,
+                                            borderRadius: 10,
+                                            border: 'none',
+                                            background: 'linear-gradient(135deg,#fb923c,#ea580c)',
+                                            color: 'white',
+                                            fontWeight: 800,
+                                            cursor: p2pLoading ? 'not-allowed' : 'pointer',
+                                        }}
+                                    >
+                                        {p2pLoading ? 'Creating...' : 'Create Room'}
+                                    </button>
+                                )}
+                            </div>
+                        ) : (
+                            <div style={{ display: 'grid', gap: 10 }}>
+                                <input
+                                    value={p2pJoinCode}
+                                    onChange={(e) => setP2PJoinCode(e.target.value.toUpperCase())}
+                                    placeholder="Enter join code"
+                                    style={{
+                                        height: 46,
+                                        borderRadius: 10,
+                                        border: '1px solid rgba(251,146,60,0.5)',
+                                        background: '#1f1408',
+                                        color: '#ffedd5',
+                                        padding: '0 12px',
+                                        letterSpacing: '2px',
+                                    }}
+                                />
+                                <button
+                                    onClick={async () => {
+                                        if (!onJoinP2PRoom) return;
+                                        setP2PLoading(true);
+                                        setP2PError(null);
+                                        try {
+                                            await onJoinP2PRoom(p2pJoinCode);
+                                        } catch (error: any) {
+                                            setP2PError(error?.message ?? 'Failed to join P2P room.');
+                                        } finally {
+                                            setP2PLoading(false);
+                                        }
+                                    }}
+                                    disabled={p2pLoading || !p2pJoinCode.trim()}
+                                    style={{
+                                        width: '100%',
+                                        height: 46,
+                                        borderRadius: 10,
+                                        border: 'none',
+                                        background: 'linear-gradient(135deg,#fb923c,#ea580c)',
+                                        color: 'white',
+                                        fontWeight: 800,
+                                        cursor: p2pLoading ? 'not-allowed' : 'pointer',
+                                    }}
+                                >
+                                    {p2pLoading ? 'Connecting...' : 'Connect'}
+                                </button>
+                            </div>
+                        )}
+
+                        {p2pError && (
+                            <div style={{ marginTop: 12, color: '#fca5a5', fontSize: 14 }}>{p2pError}</div>
+                        )}
+
+                        {p2pError && (
+                            <button
+                                onClick={() => {
+                                    setP2POpen(false);
+                                    onFallbackServer1v1?.();
+                                }}
+                                style={{
+                                    marginTop: 10,
+                                    width: '100%',
+                                    height: 42,
+                                    borderRadius: 10,
+                                    border: '1px solid rgba(148,163,184,0.4)',
+                                    background: 'rgba(255,255,255,0.07)',
+                                    color: '#e2e8f0',
+                                    cursor: 'pointer',
+                                    fontWeight: 700,
+                                }}
+                            >
+                                Play Server 1v1 instead
+                            </button>
+                        )}
+
+                        <button
+                            onClick={() => setP2POpen(false)}
+                            style={{
+                                marginTop: 10,
+                                width: '100%',
+                                height: 40,
+                                borderRadius: 10,
+                                border: '1px solid rgba(251,146,60,0.3)',
+                                background: 'transparent',
+                                color: '#fdba74',
+                                cursor: 'pointer',
+                            }}
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {wagerOpen && (
                 <div style={{

@@ -103,6 +103,7 @@ export interface PlayerState {
     playerId: string;
     teamId: number;
     isAlive: boolean;
+    characterModelId: string;
     /** Last input tick processed by server */
     lastProcessedInputTick: Tick;
 }
@@ -202,7 +203,7 @@ export interface SnapshotMeta {
  * Binary encoding format version.
  * Increment when format changes.
  */
-export const SNAPSHOT_FORMAT_VERSION = 1;
+export const SNAPSHOT_FORMAT_VERSION = 2;
 
 /**
  * Serialize a Vec3 to a DataView.
@@ -267,7 +268,7 @@ export function calcEntityStateSize(entity: EntityState): number {
         size += 12 + 1; // velocity + isGrounded
     }
     if (entity.components & ComponentType.Player) {
-        size += 36 + 4 + 1 + 4; // playerId (36) + teamId + isAlive + lastProcessedInputTick
+        size += 36 + 4 + 1 + 16 + 4; // playerId (36) + teamId + isAlive + characterModelId (16) + lastProcessedInputTick
     }
     if (entity.components & ComponentType.Health) {
         size += 4 * 4; // health, maxHealth, shield, maxShield
@@ -362,6 +363,11 @@ function serializeEntityState(view: DataView, offset: number, entity: EntityStat
         offset += 36;
         view.setUint32(offset, entity.player.teamId, true); offset += 4;
         view.setUint8(offset, entity.player.isAlive ? 1 : 0); offset += 1;
+        const characterBytes = new TextEncoder().encode(entity.player.characterModelId.padEnd(16, '\0'));
+        for (let i = 0; i < 16; i++) {
+            view.setUint8(offset + i, characterBytes[i] ?? 0);
+        }
+        offset += 16;
         view.setUint32(offset, entity.player.lastProcessedInputTick, true); offset += 4;
     }
 
@@ -469,8 +475,11 @@ function deserializeEntityState(view: DataView, offset: number): { entity: Entit
         offset += 36;
         const teamId = view.getUint32(offset, true); offset += 4;
         const isAlive = view.getUint8(offset) === 1; offset += 1;
+        const characterBytes = new Uint8Array(view.buffer, offset, 16);
+        const characterModelId = new TextDecoder().decode(characterBytes).replace(/\0/g, '');
+        offset += 16;
         const lastProcessedInputTick = tick(view.getUint32(offset, true)); offset += 4;
-        entity.player = { playerId, teamId, isAlive, lastProcessedInputTick };
+        entity.player = { playerId, teamId, isAlive, characterModelId, lastProcessedInputTick };
     }
 
     if (components & ComponentType.Health) {

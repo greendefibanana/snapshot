@@ -60,7 +60,13 @@ export interface PlaceholderEntity {
     };
     lastProcessedInputTick: Tick;
     lastProcessedInputSeq: number;
+    characterModelId: CharacterModelId;
+    inputLockUntilTick: Tick;
 }
+
+export type CharacterModelId = 'assasin' | 'grizzly' | 'kodiak' | 'panda';
+const DEFAULT_CHARACTER_MODEL_ID: CharacterModelId = 'assasin';
+const VALID_CHARACTER_MODEL_IDS: ReadonlySet<string> = new Set(['assasin', 'grizzly', 'kodiak', 'panda']);
 
 /**
  * Simulation world state.
@@ -347,6 +353,8 @@ export class SimulationLoop {
             },
             lastProcessedInputTick: tick(0),
             lastProcessedInputSeq: -1,
+            characterModelId: DEFAULT_CHARACTER_MODEL_ID,
+            inputLockUntilTick: tick(0),
         };
 
         this.world.entities.set(id, entity);
@@ -448,6 +456,10 @@ export class SimulationLoop {
         }
         for (const entity of this.world.entities.values()) {
             if (!entity.isAlive) {
+                entity.velocity = { x: 0, y: 0, z: 0 };
+                continue;
+            }
+            if (this.isEntityInputLocked(entity)) {
                 entity.velocity = { x: 0, y: 0, z: 0 };
                 continue;
             }
@@ -562,6 +574,10 @@ export class SimulationLoop {
         }
     }
 
+    private isEntityInputLocked(entity: PlaceholderEntity): boolean {
+        return entity.inputLockUntilTick > this.world.tick;
+    }
+
     /**
      * Apply physics (gravity, velocity integration).
      */
@@ -666,6 +682,7 @@ export class SimulationLoop {
         for (const shot of shots) {
             const shooter = this.getEntityByPlayerId(shot.playerId);
             if (!shooter || !shooter.isAlive) continue;
+            if (this.isEntityInputLocked(shooter)) continue;
 
             if (shooter.weapon.isReloading) {
                 continue;
@@ -772,6 +789,7 @@ export class SimulationLoop {
         isHeadshot: boolean
     ): void {
         if (!target.isAlive) return;
+        if (this.isEntityInputLocked(shooter) || this.isEntityInputLocked(target)) return;
         target.health = Math.max(0, target.health - damage);
 
         this.pendingMessages.push({
@@ -990,6 +1008,7 @@ export class SimulationLoop {
                 playerId: entity.playerId,
                 teamId: 1, // Placeholder
                 isAlive: entity.isAlive,
+                characterModelId: entity.characterModelId,
                 lastProcessedInputTick: entity.lastProcessedInputTick,
             },
             health: {
@@ -1014,6 +1033,30 @@ export class SimulationLoop {
     getLastProcessedInputSeq(playerId: string): number {
         const entity = this.getEntityByPlayerId(playerId);
         return entity?.lastProcessedInputSeq ?? -1;
+    }
+
+    setCharacterModelForPlayer(playerId: string, characterModelId: string): void {
+        if (!VALID_CHARACTER_MODEL_IDS.has(characterModelId)) return;
+        const entity = this.getEntityByPlayerId(playerId);
+        if (!entity) return;
+        entity.characterModelId = characterModelId as CharacterModelId;
+    }
+
+    setInputLockForPlayers(playerIds: string[], durationSeconds: number): Tick {
+        const endTick = (this.world.tick + secondsToTicks(durationSeconds)) as Tick;
+        for (const playerId of playerIds) {
+            const entity = this.getEntityByPlayerId(playerId);
+            if (!entity) continue;
+            entity.inputLockUntilTick = endTick;
+            entity.velocity = { x: 0, y: 0, z: 0 };
+        }
+        return endTick;
+    }
+
+    isInputLockedForPlayer(playerId: string): boolean {
+        const entity = this.getEntityByPlayerId(playerId);
+        if (!entity) return false;
+        return this.isEntityInputLocked(entity);
     }
 
     /**
