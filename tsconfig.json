@@ -30,6 +30,9 @@
             "path": "./packages/shared"
         },
         {
+            "path": "./packages/snap"
+        },
+        {
             "path": "./packages/server"
         },
         {

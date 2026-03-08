@@ -1,0 +1,275 @@
+{
+  "metadata": {
+    "version": 4.5,
+    "type": "Object",
+    "generator": "Object3D.toJSON"
+  },
+  "geometries": [
+    {
+      "uuid": "705e70ea-9ac2-404e-8d00-7cc3d2172b64",
+      "type": "TetrahedronGeometry",
+      "radius": 0.45,
+      "detail": 0
+    }
+  ],
+  "materials": [
+    {
+      "uuid": "cc021e9d-879d-48a5-86cc-133beef614e9",
+      "type": "MeshBasicMaterial",
+      "color": 10747903,
+      "reflectivity": 1,
+      "refractionRatio": 0.98,
+      "blending": 2,
+      "side": 2,
+      "transparent": true,
+      "blendColor": 0,
+      "depthWrite": false
+    }
+  ],
+  "object": {
+    "uuid": "d4102acd-b07b-4c71-8754-37f80be6718f",
+    "type": "ParticleEmitter",
+    "layers": 1,
+    "matrix": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+    ],
+    "ps": {
+      "version": "3.0",
+      "autoDestroy": true,
+      "looping": false,
+      "prewarm": false,
+      "duration": 0.18,
+      "shape": {
+        "type": "point"
+      },
+      "startLife": {
+        "type": "IntervalValue",
+        "a": 0.16,
+        "b": 0.4
+      },
+      "startSpeed": {
+        "type": "IntervalValue",
+        "a": 8.5,
+        "b": 16.5
+      },
+      "startRotation": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "startSize": {
+        "type": "IntervalValue",
+        "a": 0.04,
+        "b": 0.18
+      },
+      "startColor": {
+        "type": "ColorRange",
+        "a": {
+          "r": 0.96,
+          "g": 1,
+          "b": 1,
+          "a": 1
+        },
+        "b": {
+          "r": 0.62,
+          "g": 0.95,
+          "b": 1,
+          "a": 0.9
+        }
+      },
+      "emissionOverTime": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "emissionOverDistance": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "emissionBursts": [
+        {
+          "time": 0,
+          "count": {
+            "type": "ConstantValue",
+            "value": 30
+          },
+          "probability": 1,
+          "interval": 0.01,
+          "cycle": 1
+        }
+      ],
+      "onlyUsedByOther": false,
+      "instancingGeometry": "705e70ea-9ac2-404e-8d00-7cc3d2172b64",
+      "renderOrder": 0,
+      "renderMode": 2,
+      "rendererEmitterSettings": {},
+      "material": "cc021e9d-879d-48a5-86cc-133beef614e9",
+      "layers": 1,
+      "startTileIndex": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "uTileCount": 1,
+      "vTileCount": 1,
+      "blendTiles": false,
+      "softParticles": false,
+      "softFarFade": 0,
+      "softNearFade": 0,
+      "behaviors": [
+        {
+          "type": "SizeOverLife",
+          "size": {
+            "type": "PiecewiseBezier",
+            "functions": [
+              {
+                "function": {
+                  "p0": 0,
+                  "p1": 0.28,
+                  "p2": 0.95,
+                  "p3": 0.75
+                },
+                "start": 0.55
+              },
+              {
+                "function": {
+                  "p0": 0.75,
+                  "p1": 0.45,
+                  "p2": 0.2,
+                  "p3": 0
+                },
+                "start": 1
+              }
+            ]
+          }
+        },
+        {
+          "type": "ColorOverLife",
+          "color": {
+            "type": "Gradient",
+            "color": {
+              "type": "CLinearFunction",
+              "subType": "Color",
+              "keys": [
+                {
+                  "value": {
+                    "r": 0.92,
+                    "g": 1,
+                    "b": 1
+                  },
+                  "pos": 0
+                },
+                {
+                  "value": {
+                    "r": 0.42,
+                    "g": 0.96,
+                    "b": 1
+                  },
+                  "pos": 0.5
+                },
+                {
+                  "value": {
+                    "r": 0.12,
+                    "g": 0.44,
+                    "b": 0.7
+                  },
+                  "pos": 1
+                }
+              ]
+            },
+            "alpha": {
+              "type": "CLinearFunction",
+              "subType": "Number",
+              "keys": [
+                {
+                  "value": 1,
+                  "pos": 0
+                },
+                {
+                  "value": 0.58,
+                  "pos": 0.5
+                },
+                {
+                  "value": 0,
+                  "pos": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "ColorBySpeed",
+          "color": {
+            "type": "Gradient",
+            "color": {
+              "type": "CLinearFunction",
+              "subType": "Color",
+              "keys": [
+                {
+                  "value": {
+                    "r": 1,
+                    "g": 1,
+                    "b": 1
+                  },
+                  "pos": 0
+                },
+                {
+                  "value": {
+                    "r": 0.6,
+                    "g": 0.96,
+                    "b": 1
+                  },
+                  "pos": 0.5
+                },
+                {
+                  "value": {
+                    "r": 0.1,
+                    "g": 0.4,
+                    "b": 0.95
+                  },
+                  "pos": 1
+                }
+              ]
+            },
+            "alpha": {
+              "type": "CLinearFunction",
+              "subType": "Number",
+              "keys": [
+                {
+                  "value": 1,
+                  "pos": 0
+                },
+                {
+                  "value": 0.8,
+                  "pos": 0.5
+                },
+                {
+                  "value": 0.35,
+                  "pos": 1
+                }
+              ]
+            }
+          },
+          "speedRange": {
+            "type": "IntervalValue",
+            "a": 8,
+            "b": 17
+          }
+        }
+      ],
+      "worldSpace": false
+    }
+  }
+}

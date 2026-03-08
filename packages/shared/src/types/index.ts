@@ -268,13 +268,79 @@ export const InputFrame = {
 // GAME EVENTS - Events that occur during simulation
 // =============================================================================
 
-export type GameEvent =
+export type SignalRewardType =
+    | 'team_overclock'
+    | 'instant_ult_charge'
+    | 'overshield_pack'
+    | 'fragment_cache'
+    | 'respawn_token'
+    | 'golden_signal';
+
+export enum DropState {
+    Spawning = 'spawning',
+    Landed = 'landed',
+    Captured = 'captured',
+}
+
+export interface Drop {
+    readonly id: string;
+    readonly hardpointId: string;
+    readonly position: Vector3;
+    readonly state: DropState;
+    readonly ownerTeam: 1 | 2 | null;
+    readonly contested: boolean;
+    readonly golden: boolean;
+    readonly rewardType: SignalRewardType;
+    readonly spawnedAtMs: number;
+    readonly landedAtMs?: number;
+}
+
+export interface BuffState {
+    readonly kind: 'team_overclock' | 'overshield' | 'respawn_token' | 'instant_ult_charge' | 'fragment_cache';
+    readonly teamId?: TeamId;
+    readonly playerId?: PlayerId;
+    readonly startedAtMs: number;
+    readonly expiresAtMs?: number;
+    readonly moveSpeedMultiplier?: number;
+    readonly reloadMultiplier?: number;
+    readonly overshieldAmount?: number;
+    readonly usesRemaining?: number;
+}
+
+export interface MatchReceipt {
+    readonly mode: 'signal';
+    readonly matchId: string;
+    readonly hostPlayerId: PlayerId;
+    readonly mintedBy: PlayerId;
+    readonly winnerTeam: TeamId;
+    readonly startedAtMs: number;
+    readonly endedAtMs: number;
+    readonly teamSignal: [number, number];
+    readonly teamFragments: Record<string, number>;
+    readonly captures: ReadonlyArray<{
+        readonly dropId: string;
+        readonly rewardType: SignalRewardType;
+        readonly teamId?: TeamId;
+        readonly playerId?: PlayerId;
+        readonly amount?: number;
+        readonly atMs: number;
+    }>;
+    readonly eventCount: number;
+}
+
+interface GameEventMeta {
+    readonly seq?: number;
+    readonly timestampMs?: number;
+}
+
+export type GameEvent = GameEventMeta & (
     | { type: 'player_joined'; playerId: PlayerId; entityId: EntityId }
     | { type: 'player_left'; playerId: PlayerId }
     | { type: 'player_spawned'; entityId: EntityId; position: Vector3 }
     | { type: 'player_died'; entityId: EntityId; killerId: EntityId | null; weapon: string }
     | { type: 'aim_state'; sourceId: EntityId; isAiming: boolean }
     | { type: 'shot_fired'; sourceId: EntityId; origin: Vector3; direction: Vector3; weapon: string }
+    | { type: 'p2p_hit_vfx'; position: Vector3; normal: Vector3 }
     | { type: 'damage_dealt'; targetId: EntityId; sourceId: EntityId; amount: number; weapon: string }
     | { type: 'hit_feedback'; sourceId: EntityId; targetId: EntityId; damage: number; isHeadshot: boolean; isKill: boolean; hitPosition: Vector3 }
     | { type: 'damage_taken'; targetId: EntityId; direction: Vector3; damage: number; remainingHealth: number; remainingShield: number }
@@ -287,7 +353,18 @@ export type GameEvent =
     | { type: 'match_ended'; winningTeam: TeamId; scores: Record<number, number> }
     | { type: 'round_started'; roundNumber: number }
     | { type: 'round_ended'; winningTeam: TeamId }
-    | { type: 'net_pose'; playerId: PlayerId; position: Vector3; rotation?: Quaternion; tick: Tick };
+    | { type: 'signal_state'; activeHardpointId: string; activeHardpointIndex: number; hardpointPosition: Vector3; hardpointRadius: number; controllingTeam: 1 | 2 | null; contested: boolean; frozen: boolean; teamSignal: [number, number]; targetSignal: number; nextDropInMs?: number; playAreaRadius?: number | null; collapseActive?: boolean; tick: Tick }
+    | { type: 'drop_spawned'; drop: Drop }
+    | { type: 'drop_landed'; drop: Drop; scoreboardFrozen: boolean }
+    | { type: 'drop_captured'; drop: Drop; rewardType: SignalRewardType; mintedBy: PlayerId; receipt?: MatchReceipt }
+    | { type: 'extraction_progress'; dropId: string; playerId: PlayerId; teamId: TeamId; pct: number; stalled: boolean }
+    | { type: 'signal_reward_applied'; rewardType: SignalRewardType; teamId?: TeamId; playerId?: PlayerId; buff?: BuffState; amount?: number; expiresAtMs?: number }
+    | { type: 'collapse_warning'; warningSeconds: number }
+    | { type: 'collapse_started'; playAreaRadius: number; shrinkDurationSec: number }
+    | { type: 'golden_hardpoint_spawned'; hardpointId: string; position: Vector3; radius: number }
+    | { type: 'golden_drop_spawned'; drop: Drop; bonusSignal: number }
+    | { type: 'net_pose'; playerId: PlayerId; position: Vector3; rotation?: Quaternion; velocity?: Vector3; tick: Tick }
+);
 
 // =============================================================================
 // CONSTANTS

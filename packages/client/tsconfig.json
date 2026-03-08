@@ -5,6 +5,14 @@
         "outDir": "./dist",
         "rootDir": "./src",
         "noEmit": false,
+        "noUnusedLocals": false,
+        "exactOptionalPropertyTypes": false,
+        "baseUrl": ".",
+        "paths": {
+            "@snapshot/snap": [
+                "../snap/src/index.ts"
+            ]
+        },
         "jsx": "react-jsx",
         "lib": [
             "ES2022",
@@ -22,6 +30,9 @@
     "references": [
         {
             "path": "../shared"
+        },
+        {
+            "path": "../snap"
         }
     ]
 }

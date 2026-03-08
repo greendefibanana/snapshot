@@ -8,6 +8,25 @@ Multiplayer Three.js client + authoritative Node/Socket.io server in an npm work
 - `packages/server`: Node.js authoritative game server (Socket.io).
 - `packages/shared`: Shared protocol/simulation/types used by client and server.
 
+## MagicBlock ER Status
+
+The current MagicBlock integration is focused on the `1v1` duel grant/demo flow.
+
+- Real-time movement, aiming, shooting, and hit replication still run through the existing P2P gameplay path.
+- On match start, the host bootstraps the duel authority PDAs on Solana L1 and delegates them to MagicBlock ER.
+- During the match, the live duel remains playable without repeated wallet prompts.
+- On match end, the host signs the final authority transaction to commit the result back to Solana and undelegate the ER accounts.
+
+Today, MagicBlock is being used as the delegated match authority layer for the duel flow: match state bootstrap, ER delegation, and final commit/undelegate back to Solana.
+
+## Next Phase
+
+The next stage of the team is migrating the authority path from this hybrid model to fully realtime onchain execution.
+
+- Move more match state updates from local/P2P authority into MagicBlock ER during live gameplay.
+- Replace end-of-match-only settlement with continuous realtime authority writes.
+- Expand from delegated duel state into broader onchain gameplay authority, with the long-term goal of moving the full competitive loop onchain in realtime.
+
 ## Local Development
 
 Install dependencies from repo root:

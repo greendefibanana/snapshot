@@ -32,11 +32,14 @@ export interface RendererConfig {
     pixelRatio?: number;
     /** Callback when map is loaded */
     onMapLoaded?: (mesh: THREE.Object3D) => void;
+    /** GLB asset path for current match map */
+    mapAssetPath?: string;
 }
 
 export interface EntityVisual {
     mesh: THREE.Object3D;
     characterModelId?: string;
+    weaponModelId?: string;
     mixer?: THREE.AnimationMixer;
     outline?: THREE.LineSegments;
     attachments?: {
@@ -81,6 +84,8 @@ export class GameRenderer {
     private container: HTMLElement;
     private minimap: Minimap;
     private minimapLocalEntityId: EntityId | null = null;
+    private minimapLocalTeamId: number = 1;
+    private minimapEntityTeams: Map<number, number> = new Map();
     private networkWorldRoot: THREE.Group;
     private readonly overlaySuffix = '__Upper';
     private readonly onResizeBound: () => void;
@@ -89,6 +94,7 @@ export class GameRenderer {
     private readonly attachmentScale = new THREE.Vector3();
     private readonly attachmentCorrectionQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, Math.PI, 0));
     private lastMinimapRenderMs = 0;
+    private readonly revealPulseClock = new THREE.Clock();
 
     /** Entity meshes by entity ID */
     private entityVisuals: Map<number, EntityVisual> = new Map();
@@ -174,7 +180,7 @@ export class GameRenderer {
 
         // Setup scene
         this.setupLighting();
-        this.setupEnvironment(config.onMapLoaded);
+        this.setupEnvironment(config.onMapLoaded, config.mapAssetPath ?? '/models/Map2.glb');
 
         this.minimap = new Minimap(this.scene, this.container);
 
@@ -260,9 +266,9 @@ export class GameRenderer {
     /**
      * Setup basic environment with a floor and the map.
      */
-    private setupEnvironment(onMapLoaded?: (mesh: THREE.Object3D) => void): void {
+    private setupEnvironment(onMapLoaded?: (mesh: THREE.Object3D) => void, mapAssetPath: string = '/models/Map2.glb'): void {
         const loader = new GLTFLoader();
-        loader.load('/models/Map2.glb', (gltf) => {
+        loader.load(mapAssetPath, (gltf) => {
             const model = gltf.scene;
             model.traverse((child) => {
                 if ((child as THREE.Mesh).isMesh) {
@@ -275,10 +281,10 @@ export class GameRenderer {
             model.scale.set(3, 3, 3);
             model.updateMatrixWorld(true);
             this.scene.add(model);
-            console.log('GameRenderer: Map2.glb loaded');
+            console.log(`GameRenderer: map loaded (${mapAssetPath})`);
             onMapLoaded?.(model);
         }, undefined, (error) => {
-            console.error('GameRenderer: Error loading Map2.glb', error);
+            console.error(`GameRenderer: Error loading map (${mapAssetPath})`, error);
         });
 
         // --- GROUND PLANE ---
@@ -320,7 +326,8 @@ export class GameRenderer {
         entityId: EntityId,
         _species: Species,
         _teamId: number,
-        characterModelId: string = 'assasin'
+        characterModelId: string = 'assasin',
+        weaponModelId: string = 'smg1',
     ): void {
         if (this.entityVisuals.has(entityId as any)) {
             return;
@@ -333,13 +340,15 @@ export class GameRenderer {
         const visual: EntityVisual = {
             mesh: group,
             characterModelId,
+            weaponModelId,
             aimState: { isAiming: false, locomotionAnim: 'idle' },
             aimOverlay: { active: false, animationName: 'Pistol Walk', weight: 0.85 },
         };
         this.entityVisuals.set(entityId, visual);
+        this.minimapEntityTeams.set(entityId as any, _teamId);
 
         if (this.minimapLocalEntityId !== entityId) {
-            this.minimap.addEntityMarker(entityId as any, this.getTeamColor(_teamId));
+            this.minimap.addEntityMarker(entityId as any, this.getMinimapMarkerStyle(_teamId));
         }
 
         // Load Character model
@@ -430,7 +439,8 @@ export class GameRenderer {
 
                 // Load Gun
                 const gunLoader = new GLTFLoader();
-                gunLoader.load('/models/smg1.glb', (gunGltf) => {
+                const weaponModelPath = this.getWeaponModelPath(weaponModelId);
+                gunLoader.load(weaponModelPath, (gunGltf) => {
                     const gunModel = gunGltf.scene;
 
                     // DEBUG: Log gun details
@@ -442,12 +452,19 @@ export class GameRenderer {
                     let nozzle: THREE.Object3D | null = null;
 
                     gunModel.traverse((child) => {
+                        const childNameLower = child.name.toLowerCase();
                         if (child.name === 'Grip') {
+                            gripPoint = child;
+                        } else if (!gripPoint && child.name === 'Grip_2') {
+                            // Fallback only if primary grip is missing.
                             gripPoint = child;
                         }
                         // Check for Nozzle/Muzzle (case insensitive)
-                        const nameLower = child.name.toLowerCase();
-                        if (nameLower === 'nozzle' || nameLower === 'muzzle' || nameLower === 'nuzzle') {
+                        if (
+                            childNameLower.startsWith('nozzle') ||
+                            childNameLower.startsWith('muzzle') ||
+                            childNameLower.startsWith('nuzzle')
+                        ) {
                             nozzle = child;
                             console.log('Found gun nozzle/muzzle:', child.name);
                         }
@@ -572,7 +589,7 @@ export class GameRenderer {
                     // }
 
                 }, undefined, (err) => {
-                    console.error('Failed to load smg1.glb', err);
+                    console.error(`Failed to load weapon model: ${weaponModelPath}`, err);
                 });
             } else {
                 console.warn('Socket_Righthand not found in character model');
@@ -584,6 +601,10 @@ export class GameRenderer {
 
     getEntityCharacterModelId(entityId: EntityId): string | null {
         return this.entityVisuals.get(entityId)?.characterModelId ?? null;
+    }
+
+    getEntityWeaponModelId(entityId: EntityId): string | null {
+        return this.entityVisuals.get(entityId)?.weaponModelId ?? null;
     }
 
     /**
@@ -649,8 +670,52 @@ export class GameRenderer {
                 this.scene.remove(visual.attachments.gunHolder);
             }
         }
+        if (visual.outline) {
+            if (visual.outline.parent) {
+                visual.outline.parent.remove(visual.outline);
+            } else {
+                this.scene.remove(visual.outline);
+            }
+            (visual.outline.material as THREE.Material).dispose();
+            visual.outline.geometry.dispose();
+        }
         this.entityVisuals.delete(entityId);
+        this.minimapEntityTeams.delete(entityId as any);
         this.minimap.removeEntityMarker(entityId as any);
+    }
+
+    setEntityRevealHighlight(entityId: EntityId, enabled: boolean, color: number = 0x55ddff): void {
+        const visual = this.entityVisuals.get(entityId);
+        if (!visual) return;
+
+        if (!enabled) {
+            if (!visual.outline) return;
+            if (visual.outline.parent) {
+                visual.outline.parent.remove(visual.outline);
+            } else {
+                this.scene.remove(visual.outline);
+            }
+            (visual.outline.material as THREE.Material).dispose();
+            visual.outline.geometry.dispose();
+            delete visual.outline;
+            return;
+        }
+
+        if (!visual.outline) {
+            const helper = new THREE.BoxHelper(visual.mesh, color);
+            helper.renderOrder = 9999;
+            const mat = helper.material as THREE.LineBasicMaterial;
+            mat.transparent = true;
+            mat.opacity = 0.9;
+            mat.depthTest = false;
+            mat.depthWrite = false;
+            mat.toneMapped = false;
+            this.scene.add(helper);
+            visual.outline = helper;
+            return;
+        }
+
+        (visual.outline.material as THREE.LineBasicMaterial).color.setHex(color);
     }
 
     /**
@@ -1088,6 +1153,13 @@ export class GameRenderer {
                 // Actually mixer update is usually done in GameLoop using updateAnimations()
                 // which calls mixer.update(). We don't need to do it here.
             }
+
+            if (visual.outline) {
+                const helper = visual.outline as THREE.BoxHelper;
+                helper.update();
+                const pulse = 0.55 + ((Math.sin(this.revealPulseClock.getElapsedTime() * 8) + 1) * 0.175);
+                (helper.material as THREE.LineBasicMaterial).opacity = pulse;
+            }
         }
 
         this.renderer.render(this.scene, this.camera);
@@ -1234,10 +1306,31 @@ export class GameRenderer {
         this.minimap.removeEntityMarker(entityId as any);
     }
 
+    setMinimapLocalTeamId(teamId: number): void {
+        this.minimapLocalTeamId = teamId === 2 ? 2 : 1;
+        for (const [entityId, entityTeamId] of this.minimapEntityTeams) {
+            if (this.minimapLocalEntityId === (entityId as any)) continue;
+            this.minimap.updateEntityMarkerStyle(entityId, this.getMinimapMarkerStyle(entityTeamId));
+        }
+    }
+
+    updateEntityTeam(entityId: EntityId, teamId: number): void {
+        this.minimapEntityTeams.set(entityId as any, teamId);
+        if (this.minimapLocalEntityId === entityId) return;
+        this.minimap.updateEntityMarkerStyle(entityId as any, this.getMinimapMarkerStyle(teamId));
+    }
+
     private getTeamColor(teamId: number): number {
         if (teamId === 1) return 0x3498db;
         if (teamId === 2) return 0xe74c3c;
         return 0x95a5a6;
+    }
+
+    private getMinimapMarkerStyle(teamId: number): { color: number; shape: 'dot' | 'arrow' } {
+        if (teamId === this.minimapLocalTeamId) {
+            return { color: 0x22c55e, shape: 'arrow' };
+        }
+        return { color: 0x3498db, shape: 'dot' };
     }
 
     private getCharacterModelPath(characterModelId: string): string {
@@ -1251,6 +1344,48 @@ export class GameRenderer {
             case 'assasin':
             default:
                 return '/models/characters/Assasin.glb';
+        }
+    }
+
+    private normalizeWeaponModelId(weaponModelId: string): string {
+        switch (String(weaponModelId).toLowerCase()) {
+            case 'g-88-workhorse':
+                return 'g88_workhorse';
+            case 'the-mainline':
+                return 'the_mainline';
+            case 'v-3-interval':
+                return 'v3_interval';
+            case 'short-gun':
+                return 'shotta';
+            case 'direct-blaser':
+                return 'direct_blaser';
+            default:
+                return String(weaponModelId).toLowerCase();
+        }
+    }
+
+    private getWeaponModelPath(weaponModelId: string): string {
+        const normalized = this.normalizeWeaponModelId(weaponModelId);
+        switch (normalized) {
+            case 'g88_workhorse':
+                return '/models/guns/G-88 Workhorse.glb';
+            case 'kilometer':
+                return '/models/guns/Kilometer.glb';
+            case 'shotta':
+                return '/models/guns/shotta.glb';
+            case 'sniper':
+                return '/models/guns/sniper.glb';
+            case 'the_mainline':
+                return '/models/guns/The Mainline.glb';
+            case 'v3_interval':
+                return '/models/guns/V-3 Interval.glb';
+            case 'tungsten':
+                return '/models/guns/Tungsten.glb';
+            case 'direct_blaser':
+                return '/models/guns/Direct blaser.glb';
+            case 'smg1':
+            default:
+                return '/models/guns/smg1.glb';
         }
     }
 

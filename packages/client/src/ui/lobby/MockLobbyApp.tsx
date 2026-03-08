@@ -13,7 +13,7 @@ import './lobby-animations.css';
 // =============================================================================
 
 type LobbyPhase = 'idle' | 'queueing' | 'assembling' | 'ready_check' | 'countdown' | 'error';
-type GameMode = '1v1' | '4v4' | 'training';
+type GameMode = '1v1' | '2v2' | '4v4' | 'signal' | 'signal_4v4' | 'training' | 'abilities';
 type Ruleset = 'casual' | 'wager';
 
 interface PlayerSlot {

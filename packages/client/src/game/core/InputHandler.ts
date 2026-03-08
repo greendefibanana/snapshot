@@ -12,7 +12,7 @@ import type {
     InputFrame,
     MovementInput,
     AimInput,
-} from '@snapshot/shared';
+} from '@snapshot/shared/simulation';
 
 
 // =============================================================================
@@ -95,6 +95,12 @@ export class InputHandler {
     /** Is pointer currently locked */
     private isPointerLocked = false;
 
+    /** Edge-triggered slot switch request (0-2), -1 when idle */
+    private pendingWeaponSlotRequest = -1;
+
+    /** Mouse wheel direction accumulator for weapon cycling */
+    private pendingWeaponCycleDirection = 0;
+
     /** Bound event handlers (for cleanup) */
     private boundHandlers: {
         keydown: (e: KeyboardEvent) => void;
@@ -102,6 +108,7 @@ export class InputHandler {
         mousedown: (e: MouseEvent) => void;
         mouseup: (e: MouseEvent) => void;
         mousemove: (e: MouseEvent) => void;
+        wheel: (e: WheelEvent) => void;
         pointerlock: () => void;
         pointerlockError: () => void;
     };
@@ -119,6 +126,7 @@ export class InputHandler {
             mousedown: this.onMouseDown.bind(this),
             mouseup: this.onMouseUp.bind(this),
             mousemove: this.onMouseMove.bind(this),
+            wheel: this.onWheel.bind(this),
             pointerlock: this.onPointerLockChange.bind(this),
             pointerlockError: this.onPointerLockError.bind(this),
         };
@@ -136,6 +144,7 @@ export class InputHandler {
         this.target.addEventListener('mousedown', this.boundHandlers.mousedown);
         document.addEventListener('mouseup', this.boundHandlers.mouseup);
         document.addEventListener('mousemove', this.boundHandlers.mousemove);
+        document.addEventListener('wheel', this.boundHandlers.wheel, { passive: false });
         document.addEventListener('pointerlockchange', this.boundHandlers.pointerlock);
         document.addEventListener('pointerlockerror', this.boundHandlers.pointerlockError);
     }
@@ -149,6 +158,7 @@ export class InputHandler {
         this.target.removeEventListener('mousedown', this.boundHandlers.mousedown);
         document.removeEventListener('mouseup', this.boundHandlers.mouseup);
         document.removeEventListener('mousemove', this.boundHandlers.mousemove);
+        document.removeEventListener('wheel', this.boundHandlers.wheel);
         document.removeEventListener('pointerlockchange', this.boundHandlers.pointerlock);
         document.removeEventListener('pointerlockerror', this.boundHandlers.pointerlockError);
     }
@@ -219,10 +229,7 @@ export class InputHandler {
      * Get the complete input frame for the current tick.
      */
     getInputFrame(tick: Tick, sequence: number, clientTime: number): InputFrame {
-        const weaponSlot =
-            this.isActionActive('weapon1') ? 0 :
-                this.isActionActive('weapon2') ? 1 :
-                    this.isActionActive('weapon3') ? 2 : -1;
+        const weaponSlot = this.consumeWeaponSlotRequest();
 
         return {
             tick,
@@ -238,6 +245,25 @@ export class InputHandler {
             weaponSlot,
             clientTime,
         };
+    }
+
+    /**
+     * Consume one pending weapon slot request.
+     */
+    consumeWeaponSlotRequest(): number {
+        const next = this.pendingWeaponSlotRequest;
+        this.pendingWeaponSlotRequest = -1;
+        return next;
+    }
+
+    /**
+     * Consume mouse-wheel weapon cycle direction.
+     * Returns -1 (prev), +1 (next), or 0.
+     */
+    consumeWeaponCycleDirection(): number {
+        const dir = this.pendingWeaponCycleDirection;
+        this.pendingWeaponCycleDirection = 0;
+        return dir;
     }
 
     /**
@@ -294,6 +320,14 @@ export class InputHandler {
 
         this.keysDown.add(e.code);
 
+        if (this.bindings.weapon1.includes(e.code)) {
+            this.pendingWeaponSlotRequest = 0;
+        } else if (this.bindings.weapon2.includes(e.code)) {
+            this.pendingWeaponSlotRequest = 1;
+        } else if (this.bindings.weapon3.includes(e.code)) {
+            this.pendingWeaponSlotRequest = 2;
+        }
+
         // Prevent default for game keys
         if (this.isGameKey(e.code)) {
             e.preventDefault();
@@ -336,6 +370,13 @@ export class InputHandler {
         // Normalize yaw
         while (this.yaw > Math.PI) this.yaw -= Math.PI * 2;
         while (this.yaw < -Math.PI) this.yaw += Math.PI * 2;
+    }
+
+    private onWheel(e: WheelEvent): void {
+        if (!this.isPointerLocked) return;
+        if (e.deltaY === 0) return;
+        this.pendingWeaponCycleDirection = e.deltaY > 0 ? 1 : -1;
+        e.preventDefault();
     }
 
     private onPointerLockChange(): void {

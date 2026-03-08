@@ -63,7 +63,7 @@ export const LobbyContainer: React.FC = () => {
   // HANDLERS
   // =============================================================================
 
-  const handleSelectMode = useCallback((mode: '1v1' | '4v4' | 'training', ruleset: 'casual' | 'wager' | 'ranked') => {
+  const handleSelectMode = useCallback((mode: '1v1' | '2v2' | '4v4' | 'signal' | 'signal_4v4' | 'training' | 'abilities', ruleset: 'casual' | 'wager' | 'ranked') => {
     console.log('[Lobby] Mode selected:', mode, ruleset);
     setLobbyState(prev => ({
       ...prev,

@@ -12,7 +12,7 @@ import { getGameBridge } from '../../bridge/GameBridge';
 // TYPES
 // =============================================================================
 
-export type GameMode = '1v1' | '4v4' | 'training';
+export type GameMode = string;
 export type Ruleset = 'casual' | 'wager';
 
 export interface QueueState {
@@ -39,11 +39,7 @@ function formatTime(seconds: number): string {
 }
 
 function getModeLabel(mode: GameMode): string {
-    switch (mode) {
-        case '1v1': return '1v1 Duel';
-        case '4v4': return '4v4 Team Battle';
-        case 'training': return 'Training';
-    }
+    return mode === '1v1' ? '1v1 Duel' : 'Duel Match';
 }
 
 // =============================================================================

@@ -1,0 +1,28 @@
+{
+    "name": "@snapshot/snap",
+    "version": "0.1.0",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./rules": {
+            "import": "./dist/rules/index.js",
+            "types": "./dist/rules/index.d.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc --watch",
+        "sim": "npm run build && node dist/sim.js"
+    },
+    "dependencies": {
+        "@solana/web3.js": "^1.98.4"
+    },
+    "devDependencies": {
+        "typescript": "^5.3.3"
+    }
+}

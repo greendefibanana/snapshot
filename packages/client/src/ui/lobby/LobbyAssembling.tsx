@@ -8,7 +8,7 @@
  */
 
 import React from 'react';
-import type { PlayerSlot, GameMode, Ruleset, AccessType, PlayerId } from '@snapshot/shared';
+import type { PlayerSlot, Ruleset, AccessType, PlayerId } from '@snapshot/shared';
 import { Badge } from '../primitives/Badge.js';
 import { Card } from '../primitives/Card.js';
 import { PlayerAvatar } from '../primitives/PlayerAvatar.js';
@@ -32,11 +32,7 @@ export interface LobbyAssemblingProps {
 // =============================================================================
 
 function getModeLabel(mode: GameMode): string {
-    switch (mode) {
-        case '1v1': return '1v1 Duel';
-        case '4v4': return '4v4 Team Battle';
-        case 'training': return 'Training';
-    }
+    return mode === '1v1' ? '1v1 Duel' : 'Duel Match';
 }
 
 function createSlots(
@@ -128,3 +124,4 @@ export const LobbyAssembling: React.FC<LobbyAssemblingProps> = ({
 };
 
 export default LobbyAssembling;
+type GameMode = string;

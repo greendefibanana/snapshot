@@ -70,6 +70,7 @@ export interface BVHControllerInput {
 
 export class BVHCharacterController {
     private config: BVHControllerConfig;
+    private speedMultiplier = 1;
 
     // Collider mesh (environment with BVH)
     private collider: THREE.Mesh | null = null;
@@ -156,13 +157,17 @@ export class BVHCharacterController {
         }
     }
 
+    setExternalSpeedMultiplier(multiplier: number): void {
+        this.speedMultiplier = Math.max(0.1, Math.min(multiplier, 3));
+    }
+
     /**
      * Simple movement fallback when collider isn't ready.
      */
     private simpleMove(delta: number, input: BVHControllerInput, cameraYaw: number): void {
         const speed = input.sprint ? this.config.sprintSpeed : this.config.walkSpeed;
         const aimSpeed = input.aim ? this.config.aimSpeed : 1;
-        const moveSpeed = speed * aimSpeed;
+        const moveSpeed = speed * aimSpeed * this.speedMultiplier;
 
         const forward = this.tempVector3.set(Math.sin(cameraYaw), 0, Math.cos(cameraYaw));
         const right = this.tempVector4.set(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
@@ -346,6 +351,7 @@ export class BVHCharacterController {
         } else {
             speed = this.config.walkSpeed;
         }
+        speed *= this.speedMultiplier;
 
         // Friction / Damping for horizontal velocity
         const damping = Math.exp(-10 * delta) - 1;

@@ -31,6 +31,7 @@ const ICE_SERVERS_CACHE_MS = 5 * 60_000;
 let cachedServerIceServers: RTCIceServer[] | null = null;
 let cachedServerIceServersAtMs = 0;
 let inFlightIceServersFetch: Promise<RTCIceServer[] | null> | null = null;
+const P2P_UNRELIABLE = String((import.meta as any).env?.VITE_P2P_UNRELIABLE ?? '').toLowerCase() === 'true';
 
 function readEnvIceServers(): RTCIceServer[] {
     const rawIceJson = (import.meta.env.VITE_ICE_SERVERS_JSON as string | undefined)?.trim();
@@ -131,6 +132,7 @@ export class PeerTransport implements ITransport {
     private readonly targetPeerId: string | null;
     private peer: Peer | null = null;
     private conn: DataConnection | null = null;
+    private peerId: string | null = null;
     private connectedOnce = false;
     private timeoutHandle: number | null = null;
 
@@ -157,6 +159,10 @@ export class PeerTransport implements ITransport {
         return !!this.conn?.open;
     }
 
+    get localPeerId(): string | null {
+        return this.peerId;
+    }
+
     connect(): void {
         if (this.peer) return;
         void this.openPeer();
@@ -178,6 +184,7 @@ export class PeerTransport implements ITransport {
 
         if (this.role === 'host') {
             this.peer.on('open', (id) => {
+                this.peerId = id;
                 console.info('[P2P] host open', { id });
             });
             this.peer.on('connection', (conn) => {
@@ -192,12 +199,19 @@ export class PeerTransport implements ITransport {
         }
 
         this.peer.on('open', (id) => {
+            this.peerId = id;
             const target = this.targetPeerId || this.code;
             console.info('[P2P] joiner open', { id, code: this.code, target });
-            const conn = this.peer!.connect(target, {
-                reliable: true,
+            const baseOptions: any = {
+                reliable: !P2P_UNRELIABLE,
                 serialization: 'binary',
-            });
+            };
+            if (P2P_UNRELIABLE) {
+                // UDP-like WebRTC channel for lower latency movement replication.
+                baseOptions.ordered = false;
+                baseOptions.maxRetransmits = 0;
+            }
+            const conn = this.peer!.connect(target, baseOptions);
             this.bindConnection(conn);
             this.startTimeout();
         });
@@ -221,6 +235,7 @@ export class PeerTransport implements ITransport {
             }
             this.peer = null;
         }
+        this.peerId = null;
     }
 
     send(payload: ArrayBuffer): void {
@@ -257,7 +272,7 @@ export class PeerTransport implements ITransport {
         conn.on('open', () => {
             this.connectedOnce = true;
             this.clearTimeout();
-            console.info('[P2P] datachannel open', { peer: conn.peer, reliable: conn.reliable });
+            console.info('[P2P] datachannel open', { peer: conn.peer, reliable: conn.reliable, unreliableMode: P2P_UNRELIABLE });
             this.attachIceDiagnostics(conn);
             this.emitOpen();
         });

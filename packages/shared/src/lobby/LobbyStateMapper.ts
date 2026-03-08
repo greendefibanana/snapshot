@@ -56,10 +56,10 @@ const DEFAULT_LOBBY_STATE: LobbyState = {
     phase: 'idle',
     players: [],
     localPlayerId: '',
-    mode: '4v4',
+    mode: '1v1',
     ruleset: 'casual',
     access: 'public',
-    maxPlayers: 8,
+    maxPlayers: 2,
     minPlayers: 2,
     countdownSec: 0,
 };
@@ -124,14 +124,8 @@ function mapMode(mode?: string): GameMode {
         case '1v1':
         case 'duel':
             return '1v1';
-        case '4v4':
-        case 'team':
-            return '4v4';
-        case 'training':
-        case 'practice':
-            return 'training';
         default:
-            return '4v4';
+            return '1v1';
     }
 }
 
@@ -215,7 +209,7 @@ export function mapRoomStateToLobbyState(
         mode,
         ruleset,
         access: mapAccess(roomState.access),
-        maxPlayers: roomState.maxPlayers ?? 8,
+        maxPlayers: roomState.maxPlayers ?? 2,
         minPlayers: roomState.minPlayers ?? 2,
         countdownSec: roomState.countdownSeconds ?? 0,
         queue: mapQueueState(roomState, mode, ruleset),

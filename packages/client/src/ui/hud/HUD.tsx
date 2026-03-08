@@ -10,8 +10,8 @@ import { getGameBridge, type UIGameState, type GameToUIEvent } from '../../bridg
 // KillFeedEntry type is available via GameToUIEvent
 
 interface HUDProps {
-    matchMode?: string | null;
-    matchRuleset?: string | null;
+    matchMode?: string | null | undefined;
+    matchRuleset?: string | null | undefined;
 }
 
 // =============================================================================
@@ -286,7 +286,36 @@ const styles = {
         fontWeight: 500,
         fontFamily: 'monospace',
     },
-
+    signalPanel: {
+        position: 'absolute' as const,
+        top: 72,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        minWidth: 360,
+        background: 'rgba(0, 0, 0, 0.62)',
+        border: '1px solid rgba(255, 255, 255, 0.22)',
+        borderRadius: 8,
+        padding: '8px 12px',
+        fontSize: 12,
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 4,
+    },
+    snapDebugPanel: {
+        position: 'absolute' as const,
+        top: 72,
+        right: 20,
+        minWidth: 320,
+        background: 'rgba(8, 16, 30, 0.78)',
+        border: '1px solid rgba(80, 180, 255, 0.35)',
+        borderRadius: 8,
+        padding: '8px 12px',
+        fontSize: 12,
+        fontFamily: 'monospace',
+        display: 'flex',
+        flexDirection: 'column' as const,
+        gap: 4,
+    },
     // Top right - Stats
     statsContainer: {
         position: 'absolute' as const,
@@ -474,6 +503,10 @@ export const HUD: React.FC<HUDProps> = ({ matchMode, matchRuleset }) => {
         normalizedMode === 'training' ||
         normalizedMode === '1v1' ||
         normalizedRuleset === 'wager';
+    const showSignalHud = normalizedMode === 'signal';
+    const showMagicBlockDuelHud = normalizedMode === 'duel_er' || normalizedMode === '1v1_magicblock';
+    const showAuthorityHud = showSignalHud || showMagicBlockDuelHud;
+    const showNetDebug = state.netRole === 'p2p_host' || state.netRole === 'p2p_client';
 
     return (
         <div style={styles.container}>
@@ -643,6 +676,68 @@ export const HUD: React.FC<HUDProps> = ({ matchMode, matchRuleset }) => {
                 <div>Ping: {state.ping}ms</div>
                 <div>K/D/A: {state.kills}/{state.deaths}/{state.assists}</div>
             </div>
+            {showSignalHud && (
+                <div style={styles.signalPanel}>
+                    {state.signalActiveDropBuffName && (
+                        <div
+                            style={{
+                                fontWeight: 800,
+                                color: '#ffdd66',
+                                textShadow: '0 0 8px rgba(255,190,64,0.6)',
+                            }}
+                        >
+                            ACTIVE DROP BUFF: {state.signalActiveDropBuffName} ({Math.max(0, Math.ceil(state.signalActiveDropBuffRemainingSec))}s)
+                        </div>
+                    )}
+                    <div>Zone: #{state.signalZoneNumber} ({state.signalZoneState})</div>
+                    <div>Zone Timer: {Math.max(0, Math.floor(state.signalZoneTimerSec))}s</div>
+                    <div>Zone Owner: {state.signalZoneOwnerLabel}</div>
+                    <div>Signal: BLUE {state.teamScores[1] ?? 0} | RED {state.teamScores[2] ?? 0}</div>
+                    <div>Next Drop: {Math.max(0, Math.floor(state.signalNextDropSec))}s</div>
+                    <div>Extraction: {Math.round((state.signalExtractionPct ?? 0) * 100)}%{state.signalExtractionStalled ? ' (stalled)' : ''}</div>
+                    <div>Buffs: {state.signalActiveBuffs.length > 0 ? state.signalActiveBuffs.join(', ') : 'None'}</div>
+                    <div>Sudden Death: {state.signalSuddenDeathStatus.toUpperCase()}</div>
+                </div>
+            )}
+            {showAuthorityHud && (
+                <div style={styles.snapDebugPanel}>
+                    <div style={{ fontWeight: 800, color: '#7dd3fc' }}>
+                        {showMagicBlockDuelHud ? 'MAGICBLOCK DEBUG' : 'SNAP DEBUG'}
+                    </div>
+                    {showMagicBlockDuelHud && <div>Mode: 1v1 MagicBlock ER</div>}
+                    {showMagicBlockDuelHud && <div>Objective: First to 10 kills</div>}
+                    <div>Backend: {state.signalSnapBackend}</div>
+                    <div>Seq: {state.signalSnapSeq}</div>
+                    <div>Hash: {state.signalSnapStateHash || '(none)'}</div>
+                    <div>Signal: BLUE {state.signalSnapSignalBlue} | RED {state.signalSnapSignalRed}</div>
+                    {showMagicBlockDuelHud && <div>Score: BLUE {state.teamScores[1] ?? 0} | RED {state.teamScores[2] ?? 0}</div>}
+                    <div>Authority: {state.signalAuthoritySource}</div>
+                    <div>Delegated: {state.signalAuthorityDelegated ? 'yes' : 'no'}</div>
+                    <div>Latest Commit Seq: {state.signalAuthorityLatestCommitSeq}</div>
+                    <div>Last Commit Sig: {state.signalAuthorityLastCommitSignature ?? 'none'}</div>
+                    <div>Match ID: {state.signalAuthorityMatchId ?? 'none'}</div>
+                    {showSignalHud && (
+                        <div>
+                            Zone: #{state.signalSnapActiveZone} {state.signalSnapZonePhase} ({Math.max(0, Math.floor(state.signalSnapZoneRemainingSec))}s)
+                        </div>
+                    )}
+                    {showSignalHud && <div>Drop Modifier: {state.signalSnapActiveDropModifierId ?? 'none'}</div>}
+                </div>
+            )}
+            {showNetDebug && (
+                <div style={styles.snapDebugPanel}>
+                    <div style={{ fontWeight: 800, color: '#93c5fd' }}>NET DEBUG</div>
+                    <div>Role: {state.netRole}</div>
+                    <div>Ping: {state.ping}ms</div>
+                    <div>Snapshots: {state.netSnapshotRate} Hz</div>
+                    <div>Dropped Snapshots: {state.netDroppedSnapshots}</div>
+                    <div>Event Backlog: {state.netEventBacklog}</div>
+                    <div>Interp Delay: {state.netInterpolationDelayTicks} ticks</div>
+                    <div>Bytes In: {state.netBytesInPerSec}/s</div>
+                    <div>Bytes Out: {state.netBytesOutPerSec}/s</div>
+                    <div>Send Backlog: {state.netSendBacklogBytes} B</div>
+                </div>
+            )}
 
             {/* Kill Feed */}
             <div style={styles.killFeedContainer}>

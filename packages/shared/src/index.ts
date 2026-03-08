@@ -140,3 +140,16 @@ export type {
 
 // Solana helpers
 export { wagerMatchSeed } from './solana/wagerSeeds.js';
+
+// Social
+export {
+    FriendList,
+    InviteManager,
+    createFriendListProvider,
+    type FriendStatus,
+    type InviteStatus,
+    type FriendRelation,
+    type LobbyInvite,
+    type InviteResult,
+    type FriendRequestResult,
+} from './social/index.js';

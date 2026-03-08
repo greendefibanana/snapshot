@@ -11,7 +11,7 @@ import React from 'react';
 // TYPES
 // =============================================================================
 
-export type GameMode = '1v1' | '4v4' | 'training';
+export type GameMode = string;
 
 export interface LobbyPlayer {
     readonly playerId: string;
@@ -30,11 +30,7 @@ export interface LobbyCountdownProps {
 // =============================================================================
 
 function getModeLabel(mode: GameMode): string {
-    switch (mode) {
-        case '1v1': return '1v1 Duel';
-        case '4v4': return '4v4 Team Battle';
-        case 'training': return 'Training';
-    }
+    return mode === '1v1' ? '1v1 Duel' : 'Duel Match';
 }
 
 // =============================================================================

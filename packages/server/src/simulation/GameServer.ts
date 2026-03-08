@@ -25,6 +25,7 @@ import {
     normalizeBinaryData,
     serializeServerMessage,
     type ClientMessage,
+    type GameMode,
     type ServerMessage,
     unwrapBinaryMessage,
     wrapBinaryMessage,
@@ -38,7 +39,9 @@ import {
     type ConnectedClient,
 } from './StateBroadcaster.js';
 import { SimpleMatchmaker } from '../services/SimpleMatchmaker.js';
+import { MatchTokenService } from '../services/MatchTokenService.js';
 import { PlayerNameStore } from '../services/PlayerNameStore.js';
+import { PublicMatchmakingService, type PublicMatchmakingMode } from '../services/PublicMatchmakingService.js';
 import { buildSettleWagerIx } from '../services/wagerProgram.js';
 import { ServerBVH, mapPathFromCwd } from '../physics/ServerBVH.js';
 import { createSocketIoServerTransportChannel, type ServerTransportChannel } from '../networking/ServerTransport.js';
@@ -73,10 +76,13 @@ interface P2PRoomRecord {
     code: string;
     hostPlayerId: string;
     hostPeerId: string;
+    mode: GameMode;
+    maxPeers: number;
     createdAtMs: number;
     lastHeartbeatAtMs: number;
-    reservedJoinerId: string | null;
-    reservationAtMs: number | null;
+    connectedPlayerIds: string[];
+    reservedJoinerIds: string[];
+    reservationByPlayerId: Record<string, number>;
 }
 
 type IceServerConfig = {
@@ -95,6 +101,7 @@ const CHARACTER_MODELS = ['assasin', 'grizzly', 'kodiak', 'panda'] as const;
 const P2P_ROOM_HEARTBEAT_TTL_MS = 60_000;
 const P2P_RESERVATION_TTL_MS = 15_000;
 const P2P_ROOM_CLEANUP_INTERVAL_MS = 2_000;
+const MATCHMAKING_API_PREFIX = '/api/matchmaking';
 
 const VALIDATION = {
     maxSpeed: 25, // units/sec
@@ -151,6 +158,11 @@ function summarizeDisconnectDetails(details: any): Record<string, unknown> | und
     return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function sanitizePublicMatchmakingMode(value: unknown): PublicMatchmakingMode | null {
+    if (value === '1v1') return value;
+    return null;
+}
+
 function sanitizeP2PCode(value: unknown): string {
     if (typeof value !== 'string') return '';
     return value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
@@ -171,6 +183,7 @@ export class GameServer {
     private stateBroadcaster: StateBroadcaster;
     private inputQueue: ServerInputQueue;
     private matchmaker: SimpleMatchmaker;
+    private publicMatchmaking: PublicMatchmakingService;
     private playerNameStore: PlayerNameStore;
     private wagerAuthorityKeypair: Keypair | null = null;
     private wagerProgramId: PublicKey | null = null;
@@ -235,6 +248,9 @@ export class GameServer {
         });
 
         this.matchmaker = new SimpleMatchmaker();
+        this.publicMatchmaking = new PublicMatchmakingService(
+            new MatchTokenService(process.env.MATCHMAKING_TOKEN_SECRET ?? ''),
+        );
         this.playerNameStore = new PlayerNameStore(path.resolve(process.cwd(), 'data', 'player-names.json'));
         this.wagerAuthorityKeypair = parseKeypairFromEnv(process.env.WAGER_AUTHORITY_SECRET_KEY);
         this.wagerProgramId = process.env.WAGER_PROGRAM_ID ? new PublicKey(process.env.WAGER_PROGRAM_ID) : null;
@@ -297,11 +313,12 @@ export class GameServer {
         console.log(`GameServer: Socket.io listening on ${this.config.host}:${this.config.port}`);
 
         await this.playerNameStore.load();
+        await this.matchmaker.loadPersistentState();
 
         if (CLIENT_POSE_AUTHORITY) {
             this.bvh = new ServerBVH();
             const mapPath = mapPathFromCwd();
-            console.log(`GameServer: Loading Map2.glb for BVH at ${mapPath}`);
+            console.log(`GameServer: Loading map for BVH at ${mapPath}`);
             await this.bvh.loadMap(mapPath, 3, 0.1);
             const bounds = this.bvh.getBounds();
             if (bounds) {
@@ -328,6 +345,7 @@ export class GameServer {
     stop(): void {
         console.log('GameServer: Stopping...');
         void this.playerNameStore.flush();
+        void this.matchmaker.flushPersistentState();
 
         // Stop tick scheduler
         this.tickScheduler.stop();
@@ -417,18 +435,21 @@ export class GameServer {
                     this.playerNameStore.set(walletKey, displayName);
                 }
             }
+            this.matchmaker.setPlayerWallet(playerId as any, walletKey);
 
             // Store wallet key
             // this.players.get(playerId).walletKey = walletKey; 
 
             // Send initial lobby state
-            const state = this.matchmaker.getLobbyState(playerId as any);
-            channel.emit('lobby_state', state);
+            this.emitLobbyAndSocialState(playerId);
         });
 
         channel.on('join_queue', (data: any) => {
             console.log(`GameServer: Join queue request from ${playerId}`, data);
             const walletKey = data.walletKey;
+            const requestedMode = typeof data.mode === 'string' ? data.mode : '1v1';
+            const normalizedMode = (requestedMode === '1v1' ? '1v1' : '1v1') as GameMode;
+            const transport = normalizedMode === '1v1' && data.transport === 'p2p' ? 'p2p' : 'socket';
             const displayName =
                 sanitizeDisplayName(data.displayName) ??
                 (walletKey ? this.playerNameStore.get(walletKey) : null);
@@ -440,15 +461,17 @@ export class GameServer {
             }
             this.matchmaker.enqueue({
                 playerId: playerId as any,
-                mode: data.mode,
+                mode: normalizedMode,
                 ruleset: data.ruleset ?? 'casual',
+                transport,
                 wagerAmountSol: typeof data.wagerAmountSol === 'number' ? data.wagerAmountSol : undefined,
-                walletKey: data.walletKey
+                walletKey: data.walletKey,
+                selectedLoadoutSlot: typeof data.selectedLoadoutSlot === 'number' ? data.selectedLoadoutSlot : undefined,
             });
-
-            // Send updated state
-            const state = this.matchmaker.getLobbyState(playerId as any);
-            channel.emit('lobby_state', state);
+            const partyMembers = this.matchmaker.getSocialState(playerId as any).party?.members.map((m) => m.playerId) ?? [playerId];
+            for (const memberId of partyMembers) {
+                this.emitLobbyAndSocialState(memberId);
+            }
 
             // Check for matches
             const match = this.matchmaker.getMatchForPlayer(playerId as any);
@@ -459,13 +482,155 @@ export class GameServer {
 
         channel.on('leave_queue', () => {
             this.matchmaker.removeFromQueue(playerId as any);
-            const state = this.matchmaker.getLobbyState(playerId as any);
-            channel.emit('lobby_state', state);
+            const partyMembers = this.matchmaker.getSocialState(playerId as any).party?.members.map((m) => m.playerId) ?? [playerId];
+            for (const memberId of partyMembers) {
+                this.emitLobbyAndSocialState(memberId);
+            }
         });
 
         channel.on('get_lobby_state', () => {
-            const state = this.matchmaker.getLobbyState(playerId as any);
-            channel.emit('lobby_state', state);
+            this.emitLobbyAndSocialState(playerId);
+        });
+
+        channel.on('get_social_state', () => {
+            channel.emit('social_state', this.matchmaker.getSocialState(playerId as any));
+        });
+
+        channel.on('loadouts_get', (_data: any, ack?: (response: any) => void) => {
+            const loadouts = this.matchmaker.getPersistedLoadoutsForPlayer(playerId as any);
+            ack?.({ ok: true, loadouts });
+        });
+
+        channel.on('loadouts_save', (data: any, ack?: (response: any) => void) => {
+            const result = this.matchmaker.savePersistedLoadoutsForPlayer(playerId as any, data?.loadouts);
+            ack?.(result);
+        });
+
+        channel.on('select_match_loadout', (data: any) => {
+            const selection = this.matchmaker.updateMatchLoadoutSelection(playerId as any, {
+                slotIndex: typeof data?.slotIndex === 'number' ? data.slotIndex : undefined,
+                characterModelId: typeof data?.characterModelId === 'string' ? data.characterModelId : undefined,
+                weaponModelId: typeof data?.weaponModelId === 'string' ? data.weaponModelId : undefined,
+            });
+            if (!selection) return;
+
+            if (typeof selection.characterModelId === 'string') {
+                this.simulationLoop.setCharacterModelForPlayer(playerId, selection.characterModelId);
+            }
+            if (typeof selection.weaponModelId === 'string') {
+                this.simulationLoop.setWeaponModelForPlayer(playerId, selection.weaponModelId);
+            }
+
+            const matchId = this.matchByPlayerId.get(playerId);
+            if (!matchId) return;
+            const state = this.preRoundByMatchId.get(matchId);
+            if (!state) return;
+            for (const id of state.players) {
+                const out = this.playerChannels.get(id);
+                out?.emit('character_selected', { playerId, characterModelId: selection.characterModelId });
+            }
+        });
+
+        channel.on('friend_request_send', (data: any, ack?: (response: any) => void) => {
+            const toPlayerId = String(data?.toPlayerId ?? '').trim();
+            if (!toPlayerId) {
+                ack?.({ ok: false, error: 'Missing target player.' });
+                return;
+            }
+            const result = this.matchmaker.sendFriendRequest(playerId as any, toPlayerId as any);
+            ack?.(result);
+            this.emitLobbyAndSocialState(playerId);
+            this.emitLobbyAndSocialState(toPlayerId);
+        });
+
+        channel.on('friend_request_accept', (data: any, ack?: (response: any) => void) => {
+            const fromPlayerId = String(data?.fromPlayerId ?? '').trim();
+            if (!fromPlayerId) {
+                ack?.({ ok: false, error: 'Missing requester.' });
+                return;
+            }
+            const result = this.matchmaker.acceptFriendRequest(playerId as any, fromPlayerId as any);
+            ack?.(result);
+            this.emitLobbyAndSocialState(playerId);
+            this.emitLobbyAndSocialState(fromPlayerId);
+        });
+
+        channel.on('friend_request_decline', (data: any, ack?: (response: any) => void) => {
+            const fromPlayerId = String(data?.fromPlayerId ?? '').trim();
+            if (!fromPlayerId) {
+                ack?.({ ok: false, error: 'Missing requester.' });
+                return;
+            }
+            const result = this.matchmaker.declineFriendRequest(playerId as any, fromPlayerId as any);
+            ack?.(result);
+            this.emitLobbyAndSocialState(playerId);
+            this.emitLobbyAndSocialState(fromPlayerId);
+        });
+
+        channel.on('friend_remove', (data: any, ack?: (response: any) => void) => {
+            const friendId = String(data?.friendId ?? '').trim();
+            if (!friendId) {
+                ack?.({ ok: false, error: 'Missing friend id.' });
+                return;
+            }
+            const result = this.matchmaker.removeFriend(playerId as any, friendId as any);
+            ack?.(result);
+            this.emitLobbyAndSocialState(playerId);
+            this.emitLobbyAndSocialState(friendId);
+        });
+
+        channel.on('party_create', (_data: any, ack?: (response: any) => void) => {
+            const party = this.matchmaker.createParty(playerId as any);
+            ack?.({ ok: true, party });
+            for (const member of party.members) {
+                this.emitLobbyAndSocialState(member.playerId);
+            }
+        });
+
+        channel.on('party_leave', (_data: any, ack?: (response: any) => void) => {
+            const before = this.matchmaker.getSocialState(playerId as any).party;
+            const memberIds = new Set<string>(before?.members.map((member) => member.playerId) ?? []);
+            memberIds.add(playerId);
+            this.matchmaker.leaveParty(playerId as any);
+            ack?.({ ok: true });
+            for (const memberId of memberIds) {
+                this.emitLobbyAndSocialState(memberId);
+            }
+        });
+
+        channel.on('party_invite_send', (data: any, ack?: (response: any) => void) => {
+            const toPlayerId = String(data?.toPlayerId ?? '').trim();
+            if (!toPlayerId) {
+                ack?.({ ok: false, error: 'Missing target player.' });
+                return;
+            }
+            const result = this.matchmaker.inviteToParty(playerId as any, toPlayerId as any);
+            ack?.(result);
+            this.emitLobbyAndSocialState(playerId);
+            this.emitLobbyAndSocialState(toPlayerId);
+        });
+
+        channel.on('party_invite_respond', (data: any, ack?: (response: any) => void) => {
+            const inviteId = String(data?.inviteId ?? '').trim();
+            const accept = Boolean(data?.accept);
+            if (!inviteId) {
+                ack?.({ ok: false, error: 'Missing invite id.' });
+                return;
+            }
+
+            const existingParty = this.matchmaker.getSocialState(playerId as any).party;
+            const priorMembers = new Set<string>(existingParty?.members.map((member) => member.playerId) ?? []);
+            priorMembers.add(playerId);
+
+            const result = this.matchmaker.respondToPartyInvite(playerId as any, inviteId, accept);
+            ack?.(result);
+
+            const nextParty = this.matchmaker.getSocialState(playerId as any).party;
+            const nextMembers = new Set<string>(nextParty?.members.map((member) => member.playerId) ?? []);
+
+            for (const memberId of priorMembers) this.emitLobbyAndSocialState(memberId);
+            for (const memberId of nextMembers) this.emitLobbyAndSocialState(memberId);
+            this.emitLobbyAndSocialState(playerId);
         });
 
         channel.on('wager_locked', (data: any) => {
@@ -507,10 +672,13 @@ export class GameServer {
                 code,
                 hostPlayerId: playerId,
                 hostPeerId: peerId,
+                mode: '1v1' as GameMode,
+                maxPeers: 2,
                 createdAtMs: existing?.createdAtMs ?? now,
                 lastHeartbeatAtMs: now,
-                reservedJoinerId: null,
-                reservationAtMs: null,
+                connectedPlayerIds: existing?.connectedPlayerIds ?? [playerId],
+                reservedJoinerIds: existing?.reservedJoinerIds ?? [],
+                reservationByPlayerId: existing?.reservationByPlayerId ?? {},
             });
             this.p2pCodeByHostPlayer.set(playerId, code);
             ack?.({ ok: true, code, peerId });
@@ -552,20 +720,30 @@ export class GameServer {
                 return;
             }
 
-            if (
-                room.reservedJoinerId &&
-                room.reservedJoinerId !== playerId &&
-                room.reservationAtMs !== null &&
-                now - room.reservationAtMs < P2P_RESERVATION_TTL_MS
-            ) {
+            const reservedActiveCount = room.reservedJoinerIds.filter((id) => {
+                const reservedAt = room.reservationByPlayerId[id];
+                return Number.isFinite(reservedAt) && (now - reservedAt) < P2P_RESERVATION_TTL_MS;
+            }).length;
+            const joinedCount = room.connectedPlayerIds.length;
+            const alreadyReserved = room.reservedJoinerIds.includes(playerId);
+            const alreadyJoined = room.connectedPlayerIds.includes(playerId);
+            if (!alreadyReserved && !alreadyJoined && (joinedCount + reservedActiveCount) >= room.maxPeers) {
                 ack?.({ ok: false, error: 'room_full' });
                 return;
             }
 
-            room.reservedJoinerId = playerId;
-            room.reservationAtMs = now;
+            if (!alreadyReserved && !alreadyJoined) {
+                room.reservedJoinerIds.push(playerId);
+            }
+            room.reservationByPlayerId[playerId] = now;
             room.lastHeartbeatAtMs = now;
-            ack?.({ ok: true, code: room.code, peerId: room.hostPeerId });
+            ack?.({
+                ok: true,
+                code: room.code,
+                peerId: room.hostPeerId,
+                mode: room.mode,
+                maxPeers: room.maxPeers,
+            });
         });
 
         channel.on('p2p_mark_connected', (data: any, ack?: (response: any) => void) => {
@@ -576,14 +754,26 @@ export class GameServer {
                 return;
             }
             const isHost = room.hostPlayerId === playerId;
-            const isReservedJoiner = room.reservedJoinerId === playerId;
+            const isReservedJoiner = room.reservedJoinerIds.includes(playerId);
             if (!isHost && !isReservedJoiner) {
                 ack?.({ ok: false, error: 'forbidden' });
                 return;
             }
-            this.p2pRoomsByCode.delete(code);
-            this.p2pCodeByHostPlayer.delete(room.hostPlayerId);
-            ack?.({ ok: true });
+            if (!room.connectedPlayerIds.includes(playerId)) {
+                room.connectedPlayerIds.push(playerId);
+            }
+            room.reservedJoinerIds = room.reservedJoinerIds.filter((id) => id !== playerId);
+            delete room.reservationByPlayerId[playerId];
+            if (room.maxPeers <= 2 && room.connectedPlayerIds.length >= room.maxPeers) {
+                this.p2pRoomsByCode.delete(code);
+                this.p2pCodeByHostPlayer.delete(room.hostPlayerId);
+            }
+            ack?.({
+                ok: true,
+                mode: room.mode,
+                connectedPeers: room.connectedPlayerIds.length,
+                maxPeers: room.maxPeers,
+            });
         });
 
         channel.on('p2p_release_room', (data: any, ack?: (response: any) => void) => {
@@ -662,6 +852,7 @@ export class GameServer {
      */
     private onPlayerDisconnect(playerId: string): void {
         console.log(`GameServer: Player disconnected: ${playerId}`);
+        this.publicMatchmaking.handleDisconnect(playerId);
 
         // Handle matchmaking disconnect
         const disbandedMatch = this.matchmaker.handlePlayerDisconnect(playerId as any);
@@ -670,19 +861,13 @@ export class GameServer {
             for (const id of disbandedMatch.players) {
                 this.matchByPlayerId.delete(id);
             }
-            // Notify opponent
-            const opponentId = disbandedMatch.players.find(p => p !== playerId);
-            if (opponentId) {
-                const opponentChannel = this.playerChannels.get(opponentId);
-                if (opponentChannel) {
-                    console.log(`GameServer: Notifying opponent ${opponentId} of disconnect`);
-                    // Send lobby update to reset state
-                    const state = this.matchmaker.getLobbyState(opponentId as any);
-                    // Force state to idle/disconnected message
-                    // We could also send a specific 'opponent_disconnected' event
-                    opponentChannel.emit('lobby_state', state);
-                    opponentChannel.emit('game_message', { type: 'opponent_left', message: 'Opponent disconnected' });
+            for (const remainingPlayerId of disbandedMatch.players) {
+                if (remainingPlayerId === playerId) continue;
+                const remainingChannel = this.playerChannels.get(remainingPlayerId);
+                if (remainingChannel) {
+                    remainingChannel.emit('game_message', { type: 'opponent_left', message: 'A teammate/opponent disconnected. Match canceled.' });
                 }
+                this.emitLobbyAndSocialState(remainingPlayerId);
             }
         }
 
@@ -710,6 +895,14 @@ export class GameServer {
         if (entity) {
             this.simulationLoop.removeEntity(entity.id);
         }
+        this.emitLobbyAndSocialState(playerId);
+    }
+
+    private emitLobbyAndSocialState(playerId: string): void {
+        const channel = this.playerChannels.get(playerId);
+        if (!channel) return;
+        channel.emit('lobby_state', this.matchmaker.getLobbyState(playerId as any));
+        channel.emit('social_state', this.matchmaker.getSocialState(playerId as any));
     }
 
     /**
@@ -727,13 +920,26 @@ export class GameServer {
         match.players.forEach((playerId: string) => {
             const channel = this.playerChannels.get(playerId);
             if (channel) {
-                const opponentId = match.players.find((p: string) => p !== playerId);
+                const opponentId = match.mode === '1v1'
+                    ? match.players.find((p: string) => p !== playerId)
+                    : undefined;
                 const opponentWallet = opponentId ? match.walletKeys[opponentId] : undefined;
                 const keyA = match.walletKeys[match.players[0]] ?? match.players[0];
                 const keyB = match.walletKeys[match.players[1]] ?? match.players[1];
                 const initiatorId = keyA <= keyB ? match.players[0] : match.players[1];
                 channel.emit('match_found', {
                     matchId: match.id,
+                    mode: match.mode,
+                    transport: match.transport,
+                    ...(match.transport === 'p2p' ? {
+                        p2pCode: match.p2pRoomCode,
+                        hostPlayerId: match.hostPlayerId ?? match.players[0],
+                        maxPlayers: match.players.length,
+                        players: match.players.map((id: string) => ({
+                            playerId: id,
+                            teamId: match.teamByPlayer?.[id] ?? 1,
+                        })),
+                    } : {}),
                     ruleset: match.ruleset,
                     wagerAmountSol: match.wagerAmountSol,
                     opponentWallet,
@@ -741,6 +947,10 @@ export class GameServer {
                 });
             }
         });
+
+        if (match.transport === 'p2p') {
+            return;
+        }
 
         if (match.ruleset === 'wager') {
             this.wagerLocks.set(match.id, new Set());
@@ -788,6 +998,17 @@ export class GameServer {
         const url = new URL(rawUrl, 'http://localhost');
         const pathname = decodeURIComponent(url.pathname);
 
+        if (pathname.startsWith(MATCHMAKING_API_PREFIX) && method === 'OPTIONS') {
+            res.writeHead(204, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Cache-Control': 'no-store',
+            });
+            res.end();
+            return;
+        }
+
         if (pathname.startsWith('/socket.io')) {
             return;
         }
@@ -814,6 +1035,124 @@ export class GameServer {
                 });
                 res.end(JSON.stringify({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }));
             }
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/enqueue` && method === 'POST') {
+            const body = await this.readJsonBody(req, res);
+            if (body === null) return;
+            const mode = sanitizePublicMatchmakingMode(body.mode);
+            const playerId = String(body.playerId ?? '').trim();
+            const buildVersion = String(body.buildVersion ?? '').trim();
+            if (!mode || !playerId || !buildVersion || !this.playerChannels.has(playerId)) {
+                this.writeJson(res, 400, { error: 'invalid_request' });
+                return;
+            }
+            const response = this.publicMatchmaking.enqueue({
+                playerId,
+                peerId: typeof body.peerId === 'string' ? body.peerId : '',
+                displayName: sanitizeDisplayName(body.displayName) ?? playerId,
+                mode,
+                region: typeof body.region === 'string' ? body.region : 'global',
+                buildVersion,
+            });
+            this.writeJson(res, 200, response);
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/status` && method === 'GET') {
+            const ticketId = String(url.searchParams.get('ticketId') ?? '').trim();
+            if (!ticketId) {
+                this.writeJson(res, 400, { error: 'missing_ticket' });
+                return;
+            }
+            this.writeJson(res, 200, this.publicMatchmaking.getStatus(ticketId));
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/heartbeat` && method === 'POST') {
+            const body = await this.readJsonBody(req, res);
+            if (body === null) return;
+            const ticketId = String(body.ticketId ?? '').trim();
+            if (!ticketId) {
+                this.writeJson(res, 400, { error: 'missing_ticket' });
+                return;
+            }
+            this.writeJson(res, 200, this.publicMatchmaking.heartbeat(ticketId));
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/cancel` && method === 'POST') {
+            const body = await this.readJsonBody(req, res);
+            if (body === null) return;
+            const ticketId = String(body.ticketId ?? '').trim();
+            if (!ticketId) {
+                this.writeJson(res, 400, { error: 'missing_ticket' });
+                return;
+            }
+            this.writeJson(res, 200, this.publicMatchmaking.cancel(ticketId));
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/report-connected` && method === 'POST') {
+            const body = await this.readJsonBody(req, res);
+            if (body === null) return;
+            const ticketId = String(body.ticketId ?? '').trim();
+            if (!ticketId) {
+                this.writeJson(res, 400, { error: 'missing_ticket' });
+                return;
+            }
+            this.writeJson(res, 200, this.publicMatchmaking.reportConnected(ticketId));
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/report-failed` && method === 'POST') {
+            const body = await this.readJsonBody(req, res);
+            if (body === null) return;
+            const ticketId = String(body.ticketId ?? '').trim();
+            if (!ticketId) {
+                this.writeJson(res, 400, { error: 'missing_ticket' });
+                return;
+            }
+            this.writeJson(res, 200, this.publicMatchmaking.reportFailed(ticketId));
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/report-live` && method === 'POST') {
+            const body = await this.readJsonBody(req, res);
+            if (body === null) return;
+            const roomId = String(body.roomId ?? '').trim();
+            if (!roomId) {
+                this.writeJson(res, 400, { error: 'missing_room' });
+                return;
+            }
+            this.writeJson(res, 200, this.publicMatchmaking.reportLive(roomId));
+            return;
+        }
+
+        if (pathname === `${MATCHMAKING_API_PREFIX}/verify-join` && method === 'POST') {
+            const body = await this.readJsonBody(req, res);
+            if (body === null) return;
+            const roomId = String(body.roomId ?? '').trim();
+            const matchId = String(body.matchId ?? '').trim();
+            const playerId = String(body.playerId ?? '').trim();
+            const matchToken = String(body.matchToken ?? '').trim();
+            if (!roomId || !matchId || !playerId || !matchToken) {
+                this.writeJson(res, 400, { ok: false, error: 'invalid_request' });
+                return;
+            }
+            this.writeJson(res, 200, this.publicMatchmaking.verifyJoin(roomId, matchId, playerId, matchToken));
+            return;
+        }
+
+        if (pathname.startsWith(`${MATCHMAKING_API_PREFIX}/room/`) && method === 'GET') {
+            const roomId = pathname.slice(`${MATCHMAKING_API_PREFIX}/room/`.length).trim();
+            if (!roomId) {
+                this.writeJson(res, 400, { error: 'missing_room' });
+                return;
+            }
+            const room = this.publicMatchmaking.getRoom(roomId);
+            this.writeJson(res, room ? 200 : 404, room ?? { error: 'room_not_found' });
             return;
         }
 
@@ -871,6 +1210,30 @@ export class GameServer {
             'Cache-Control': filePath.endsWith('.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
         });
         res.end(body);
+    }
+
+    private async readJsonBody(req: http.IncomingMessage, res: http.ServerResponse): Promise<any | null> {
+        const chunks: Buffer[] = [];
+        try {
+            for await (const chunk of req) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            const raw = Buffer.concat(chunks).toString('utf8').trim();
+            if (!raw) return {};
+            return JSON.parse(raw);
+        } catch {
+            this.writeJson(res, 400, { error: 'invalid_json' });
+            return null;
+        }
+    }
+
+    private writeJson(res: http.ServerResponse, statusCode: number, payload: unknown): void {
+        res.writeHead(statusCode, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'Access-Control-Allow-Origin': '*',
+        });
+        res.end(JSON.stringify(payload));
     }
 
     private normalizeIceServers(raw: unknown): IceServerConfig[] {
@@ -967,34 +1330,49 @@ export class GameServer {
             if (countdown < 0) {
                 clearInterval(countdownInterval);
 
-                // Define spawn points on different parts of map_Floor
-                // Using positions closer to origin (0,0) to ensure they're on the floor
-                // Spread across 4 quadrants to avoid spawning into each other
-                const availableSpawnPoints = [
-                    { id: 'SpawnPoint1', position: { x: -8, y: 3, z: -8 } },
-                    { id: 'SpawnPoint2', position: { x: 8, y: 3, z: -8 } },
-                    { id: 'SpawnPoint3', position: { x: -8, y: 3, z: 8 } },
-                    { id: 'SpawnPoint4', position: { x: 8, y: 3, z: 8 } },
-                ];
+                this.simulationLoop.configureMatch({
+                    mode: match.mode,
+                    targetScore: typeof match.targetScore === 'number' ? match.targetScore : undefined,
+                    teamByPlayer: match.teamByPlayer,
+                });
 
-                // Randomly assign different spawn points to each player
-                const shuffled = [...availableSpawnPoints].sort(() => Math.random() - 0.5);
-                const assignedSpawnPoints = shuffled.slice(0, match.players.length);
+                const teamSpawnAnchors = {
+                    1: this.simulationLoop.getTeamSpawn(1),
+                    2: this.simulationLoop.getTeamSpawn(2),
+                } as const;
+                const formationOffsets = [
+                    { x: -2.5, z: -2.5 },
+                    { x: 2.5, z: -2.5 },
+                    { x: -2.5, z: 2.5 },
+                    { x: 2.5, z: 2.5 },
+                ] as const;
+                const spawnIndices = { 1: 0, 2: 0 };
 
                 // Spawn players at designated positions
                 const spawnPositions: { [key: string]: { x: number, y: number, z: number } } = {};
                 match.players.forEach((playerId: string, index: number) => {
-                    const spawnPoint = assignedSpawnPoints[index];
-                    if (!spawnPoint) {
-                        console.error(`GameServer: No spawn point available for player ${index}, using fallback`);
-                        spawnPositions[playerId] = { x: index * 10, y: 2, z: 0 };
-                    } else {
-                        spawnPositions[playerId] = spawnPoint.position;
-                    }
+                    const teamId = Number(match.teamByPlayer?.[playerId] ?? 1) === 2 ? 2 : 1;
+                    const anchor = teamSpawnAnchors[teamId];
+                    const slotIndex = spawnIndices[teamId] % formationOffsets.length;
+                    spawnIndices[teamId] += 1;
+                    const offset = formationOffsets[slotIndex] ?? { x: 0, z: 0 };
+                    const spawn = {
+                        x: anchor.x + offset.x,
+                        y: anchor.y,
+                        z: anchor.z + offset.z,
+                    };
+                    spawnPositions[playerId] = spawn;
                     const existing = this.simulationLoop.getEntityByPlayerId(playerId);
                     if (!existing) {
-                        this.simulationLoop.createPlayerEntity(playerId, spawnPositions[playerId]);
-                        console.log(`GameServer: Spawning player ${playerId} at ${spawnPoint?.id || 'fallback'} (${JSON.stringify(spawnPositions[playerId])})`);
+                        this.simulationLoop.createPlayerEntity(playerId, spawnPositions[playerId], teamId);
+                        const selectedLoadout = match.playerLoadouts?.[playerId];
+                        if (selectedLoadout?.characterModelId) {
+                            this.simulationLoop.setCharacterModelForPlayer(playerId, selectedLoadout.characterModelId);
+                        }
+                        if (selectedLoadout?.weaponModelId) {
+                            this.simulationLoop.setWeaponModelForPlayer(playerId, selectedLoadout.weaponModelId);
+                        }
+                        console.log(`GameServer: Spawning player ${playerId} team=${teamId} at (${JSON.stringify(spawnPositions[playerId])})`);
                     } else {
                         console.warn(`GameServer: Player ${playerId} already has entity ${existing.id}, skipping spawn`);
                     }
@@ -1016,13 +1394,19 @@ export class GameServer {
                 match.players.forEach((playerId: string) => {
                     const channel = this.playerChannels.get(playerId);
                     if (channel) {
-                        const opponent = match.players.find((p: string) => p !== playerId);
+                        const opponent = match.mode === '1v1'
+                            ? match.players.find((p: string) => p !== playerId)
+                            : undefined;
                         channel.emit('match_start', {
                             spawnPosition: spawnPositions[playerId],
+                            teamId: match.teamByPlayer?.[playerId] ?? 1,
+                            mode: match.mode,
+                            targetScore: match.targetScore,
                             opponent: opponent,
                             opponentSpawnPosition: opponent ? spawnPositions[opponent] : null,
                             allPlayers: match.players.map((pid: string) => ({
                                 playerId: pid,
+                                teamId: match.teamByPlayer?.[pid] ?? 1,
                                 spawnPosition: spawnPositions[pid],
                             })),
                         });
@@ -1275,7 +1659,15 @@ export class GameServer {
             this.latestClientPoses.clear();
             this.lastAcceptedPoses.clear();
             const winnerId = message.winnerId;
-            const match = this.matchmaker.getMatchForPlayer(winnerId as any);
+            let match = this.matchmaker.getMatchForPlayer(winnerId as any);
+            if (!match) {
+                const scoreKeys = Object.keys(message.scores ?? {});
+                for (const key of scoreKeys) {
+                    if (key.startsWith('team_')) continue;
+                    match = this.matchmaker.getMatchForPlayer(key as any);
+                    if (match) break;
+                }
+            }
             if (match) {
                 this.preRoundByMatchId.delete(match.id);
                 for (const playerId of match.players) {
@@ -1324,26 +1716,6 @@ export class GameServer {
                 }
             } else if (match) {
                 this.matchmaker.removeMatch(match.id);
-            }
-        }
-
-        if (message.type === 'score_update' && !this.simulationLoop.isMatchEnded()) {
-            const scores = message.scores;
-            for (const playerId of Object.keys(scores)) {
-                if ((scores[playerId] ?? 0) >= 10) {
-                    this.simulationLoop.forceMatchEnded();
-                    const endMsg: ServerMessage = {
-                        type: 'match_ended',
-                        winnerId: playerId,
-                        scores,
-                        targetScore: 10,
-                    };
-                    const endData = wrapBinaryMessage(BinaryMessageType.ServerEvent, serializeServerMessage(endMsg));
-                    for (const channel of this.playerChannels.values()) {
-                        channel.emit('bin', endData);
-                    }
-                    break;
-                }
             }
         }
 
@@ -1397,10 +1769,9 @@ export class GameServer {
             this.p2pRoomsByCode.delete(hostCode);
         }
         for (const room of this.p2pRoomsByCode.values()) {
-            if (room.reservedJoinerId === playerId) {
-                room.reservedJoinerId = null;
-                room.reservationAtMs = null;
-            }
+            room.connectedPlayerIds = room.connectedPlayerIds.filter((id) => id !== playerId);
+            room.reservedJoinerIds = room.reservedJoinerIds.filter((id) => id !== playerId);
+            delete room.reservationByPlayerId[playerId];
         }
     }
 
@@ -1414,11 +1785,11 @@ export class GameServer {
                 this.p2pCodeByHostPlayer.delete(room.hostPlayerId);
                 continue;
             }
-            if (room.reservedJoinerId && room.reservationAtMs !== null) {
-                const reservationExpired = nowMs - room.reservationAtMs > P2P_RESERVATION_TTL_MS;
-                if (reservationExpired) {
-                    room.reservedJoinerId = null;
-                    room.reservationAtMs = null;
+            for (const reservedId of [...room.reservedJoinerIds]) {
+                const reservedAt = room.reservationByPlayerId[reservedId];
+                if (!Number.isFinite(reservedAt) || (nowMs - reservedAt) > P2P_RESERVATION_TTL_MS) {
+                    room.reservedJoinerIds = room.reservedJoinerIds.filter((id) => id !== reservedId);
+                    delete room.reservationByPlayerId[reservedId];
                 }
             }
         }

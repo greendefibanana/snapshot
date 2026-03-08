@@ -32,7 +32,7 @@ export interface AAALobbyWrapperProps {
   readonly party?: Party | undefined;
 
   // Callbacks
-  readonly onSelectMode: (mode: '1v1' | '4v4' | 'training', ruleset: 'casual' | 'wager' | 'ranked') => void;
+  readonly onSelectMode: (mode: '1v1' | '2v2' | '4v4' | 'signal' | 'signal_4v4' | 'training' | 'abilities', ruleset: 'casual' | 'wager' | 'ranked') => void;
   readonly onJoinQueue: () => void;
   readonly onLeaveQueue: () => void;
   readonly onCreateParty: () => void;

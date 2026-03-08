@@ -9,6 +9,7 @@ const localResolve = (pkg: string) => resolve(__dirname, './node_modules', pkg);
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 export default defineConfig({
+    envPrefix: ['VITE_', 'SNAP_', 'MAGICBLOCK_', 'MAGIC_', 'SOLANA_'],
     plugins: [
         react(),
         nodePolyfills({
@@ -26,6 +27,7 @@ export default defineConfig({
     resolve: {
         alias: {
             '@snapshot/shared': resolve(__dirname, '../shared/src'),
+            '@snapshot/snap': resolve(__dirname, '../snap/src'),
             'three': rootResolve('three'),
             'three/examples/jsm/loaders/SVGLoader.js': rootResolve('three/examples/jsm/loaders/SVGLoader.js'),
             'three/src/math/MathUtils.js': rootResolve('three/src/math/MathUtils.js'),

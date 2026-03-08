@@ -54,9 +54,9 @@ export class RapierCharacterController {
             if (!posAttr) return;
             const posArray = posAttr.array as Float32Array;
             for (let i = 0; i < posAttr.count; i++) {
-                const x = posArray[i * 3];
-                const y = posArray[i * 3 + 1];
-                const z = posArray[i * 3 + 2];
+                const x = posArray[i * 3] ?? 0;
+                const y = posArray[i * 3 + 1] ?? 0;
+                const z = posArray[i * 3 + 2] ?? 0;
                 boundsMin.x = Math.min(boundsMin.x, x);
                 boundsMin.y = Math.min(boundsMin.y, y);
                 boundsMin.z = Math.min(boundsMin.z, z);

@@ -35,6 +35,64 @@ import { getGameClient } from './networking/GameClient';
 
 import { WalletProvider } from './wallet/WalletProvider';
 
+function extractMapSpawnPositions(root: THREE.Object3D): {
+    team1: { x: number; y: number; z: number } | null;
+    team2: { x: number; y: number; z: number } | null;
+    hardpoints: Array<{ id: string; position: { x: number; y: number; z: number }; radius?: number }>;
+} {
+    const byNameLower = new Map<string, THREE.Object3D>();
+    root.traverse((obj) => {
+        const key = (obj.name || '').trim().toLowerCase();
+        if (!key || byNameLower.has(key)) return;
+        byNameLower.set(key, obj);
+    });
+
+    const readPoint = (name: string): { x: number; y: number; z: number } | null => {
+        const target = byNameLower.get(name);
+        if (!target) return null;
+        const worldPos = new THREE.Vector3();
+        target.getWorldPosition(worldPos);
+        return { x: worldPos.x, y: worldPos.y, z: worldPos.z };
+    };
+
+    return {
+        team1: readPoint('spawnpoint1'),
+        team2: readPoint('spawnpoint2'),
+        hardpoints: ['hardpoint1', 'hardpoint2', 'hardpoint3', 'hardpoint4'].reduce<Array<{ id: string; position: { x: number; y: number; z: number }; radius?: number }>>((out, id) => {
+            const position = readPoint(id);
+            if (position) {
+                out.push({ id, position, radius: 8 });
+            }
+            return out;
+        }, []),
+    };
+}
+
+function projectPointToColliderFloor(
+    collider: THREE.Mesh | null,
+    point: { x: number; y: number; z: number },
+    lift: number = 0.08,
+): { x: number; y: number; z: number } {
+    const boundsTree = collider?.geometry?.boundsTree;
+    if (!boundsTree) return { ...point };
+    const offsets = [4, 12, 40];
+    let hit: { point: THREE.Vector3 } | null = null;
+    for (const offset of offsets) {
+        const origin = new THREE.Vector3(point.x, point.y + offset, point.z);
+        const ray = new THREE.Ray(origin, new THREE.Vector3(0, -1, 0));
+        const nextHit = boundsTree.raycastFirst(ray, THREE.DoubleSide);
+        if (!nextHit) continue;
+        hit = nextHit as { point: THREE.Vector3 };
+        break;
+    }
+    if (!hit) return { ...point };
+    return {
+        x: point.x,
+        y: hit.point.y + lift,
+        z: point.z,
+    };
+}
+
 async function main(): Promise<void> {
     console.log('========================================');
     console.log('  SNAPSHOT Client');
@@ -126,13 +184,40 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         container: canvasContainer,
         cameraPosition: { x: 0, y: 5, z: 10 },
         shadows: true,
+        mapAssetPath: '/maps/space.glb',
         onMapLoaded: (mesh) => {
-            // Generate BVH from map geometry
             bvhCollider = generateBVHColliderFromGroup(mesh);
             if (bvhCollider) {
                 renderer.mainScene.add(bvhCollider);
+                client.setAuthoritativeCollider(bvhCollider);
                 console.log('BVH collider created');
             }
+
+            const rawMapSpawns = extractMapSpawnPositions(mesh);
+            const mapSpawns = {
+                team1: rawMapSpawns.team1 ? projectPointToColliderFloor(bvhCollider, rawMapSpawns.team1) : null,
+                team2: rawMapSpawns.team2 ? projectPointToColliderFloor(bvhCollider, rawMapSpawns.team2) : null,
+                hardpoints: rawMapSpawns.hardpoints.map((entry) => ({
+                    ...entry,
+                    position: projectPointToColliderFloor(bvhCollider, entry.position),
+                })),
+            };
+            if (mapSpawns.team1 && mapSpawns.team2) {
+                client.setSignalSoloSpawnPoints(mapSpawns.team1, mapSpawns.team2);
+                client.setTeamSpawnPoints(mapSpawns.team1, mapSpawns.team2);
+                if (!bridge.getState().isConnected && characterController) {
+                    const localSpawn = new THREE.Vector3(mapSpawns.team1.x, mapSpawns.team1.y, mapSpawns.team1.z);
+                    initialSpawn.copy(localSpawn);
+                    characterController.reset(localSpawn);
+                    bridge.setLocalRenderPos({ x: localSpawn.x, y: localSpawn.y, z: localSpawn.z });
+                    bridge.applyServerCorrection?.({ x: localSpawn.x, y: localSpawn.y, z: localSpawn.z });
+                    bridge.clearServerCorrectionTarget?.();
+                }
+            }
+            if (mapSpawns.hardpoints.length >= 3) {
+                client.setSignalHardpointPositions(mapSpawns.hardpoints);
+            }
+            client.bindSignalHardpointScene(renderer.mainScene);
 
             if (bvhCollider && characterController) {
                 characterController.setCollider(bvhCollider);
@@ -157,7 +242,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     // Always create a local visual for the controller.
     if (!renderer.hasEntityVisual(LOCAL_VISUAL_ID)) {
         renderer.setMinimapLocalEntityId(LOCAL_VISUAL_ID);
-        renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, 1, bridge.getState().selectedCharacterModelId);
+        renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, bridge.getState().localTeamId ?? 1, bridge.getState().selectedCharacterModelId);
         console.log('Created local player visual');
     }
 
@@ -194,7 +279,6 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     const remoteAnimHints = new Map<EntityId, { locomotion: string; isSliding: boolean; atMs: number }>();
     const CLIENT_AUTHORITY = false;
     const POSE_SEND_INTERVAL_MS = 33;
-    const REMOTE_INTERPOLATION_DELAY_TICKS = 2;
     let lastPoseSentMs = 0;
     const ACK_GUARD = {
         maxStaleTicks: 20,
@@ -212,15 +296,28 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     const getDesiredCharacterModel = (entityId: EntityId): string =>
         bridge.getEntityCharacterModelId(entityId) ?? 'assasin';
 
-    const ensureVisual = (entityId: EntityId, teamId: number, desiredModelId: string): void => {
+    const getDesiredTeamId = (entityId: EntityId): number =>
+        bridge.getEntityTeamId(entityId) ?? 2;
+
+    const getDesiredWeaponModel = (entityId: EntityId): string => {
+        const localEntityId = bridge.getState().localPlayerEntityId as EntityId | null;
+        if ((entityId === LOCAL_VISUAL_ID) || (localEntityId !== null && entityId === localEntityId)) {
+            return bridge.getState().selectedWeaponModelId ?? 'smg1';
+        }
+        return bridge.getEntityWeaponModelId(entityId) ?? 'smg1';
+    };
+
+    const ensureVisual = (entityId: EntityId, teamId: number, desiredModelId: string, desiredWeaponModelId: string): void => {
         const currentModelId = renderer.getEntityCharacterModelId(entityId);
+        const currentWeaponModelId = renderer.getEntityWeaponModelId(entityId);
         if (!renderer.hasEntityVisual(entityId)) {
-            renderer.createPlayerVisual(entityId, Species.Urshari, teamId, desiredModelId);
+            renderer.createPlayerVisual(entityId, Species.Urshari, teamId, desiredModelId, desiredWeaponModelId);
             return;
         }
-        if (currentModelId !== desiredModelId) {
+        renderer.updateEntityTeam(entityId, teamId);
+        if (currentModelId !== desiredModelId || currentWeaponModelId !== desiredWeaponModelId) {
             renderer.removeEntityVisual(entityId);
-            renderer.createPlayerVisual(entityId, Species.Urshari, teamId, desiredModelId);
+            renderer.createPlayerVisual(entityId, Species.Urshari, teamId, desiredModelId, desiredWeaponModelId);
         }
     };
 
@@ -228,6 +325,170 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
     let lastIsDead = bridge.getState().isDead;
     let lastIsReloading = bridge.getState().isReloading;
     const deadEntities = new Set<EntityId>();
+    type PulseRingEffect = {
+        mesh: THREE.Mesh;
+        material: THREE.MeshBasicMaterial;
+        startMs: number;
+        durationMs: number;
+        maxScale: number;
+    };
+    type ToxinFieldEffect = {
+        group: THREE.Group;
+        disc: THREE.Mesh;
+        ring: THREE.Mesh;
+        discMat: THREE.MeshBasicMaterial;
+        ringMat: THREE.MeshBasicMaterial;
+        light: THREE.PointLight;
+        endT: number;
+    };
+    type LocalBuffAuraEffect = {
+        group: THREE.Group;
+        innerRing: THREE.Mesh;
+        innerMat: THREE.MeshBasicMaterial;
+        outerRing: THREE.Mesh;
+        outerMat: THREE.MeshBasicMaterial;
+        light: THREE.PointLight;
+        buffKey: string;
+    };
+    const pulseRingEffects: PulseRingEffect[] = [];
+    const toxinFields = new Map<string, ToxinFieldEffect>();
+    let localBuffAura: LocalBuffAuraEffect | null = null;
+
+    const createPulseRingEffect = (
+        position: { x: number; y: number; z: number },
+        color: number,
+        maxScale: number = 2.8,
+        durationMs: number = 320,
+    ): void => {
+        const geometry = new THREE.RingGeometry(0.8, 1.1, 48);
+        const material = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.75,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(position.x, position.y + 0.08, position.z);
+        renderer.mainScene.add(mesh);
+        pulseRingEffects.push({
+            mesh,
+            material,
+            startMs: performance.now(),
+            durationMs,
+            maxScale,
+        });
+    };
+
+    const getScenePositionForPlayerId = (playerId: string): THREE.Vector3 | null => {
+        const entityId = bridge.getEntityIdForPlayerId(playerId as any);
+        if (entityId === null) return null;
+        return renderer.getEntityPosition(resolveVisualId(entityId as any));
+    };
+
+    const clearToxinField = (key: string): void => {
+        const field = toxinFields.get(key);
+        if (!field) return;
+        renderer.mainScene.remove(field.group);
+        renderer.mainScene.remove(field.light);
+        field.disc.geometry.dispose();
+        field.ring.geometry.dispose();
+        field.discMat.dispose();
+        field.ringMat.dispose();
+        toxinFields.delete(key);
+    };
+
+    const spawnToxinField = (key: string, center: { x: number; y: number; z: number }, radius: number, endT: number): void => {
+        clearToxinField(key);
+        const group = new THREE.Group();
+        const discMat = new THREE.MeshBasicMaterial({
+            color: 0x65ff7a,
+            transparent: true,
+            opacity: 0.18,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+        const disc = new THREE.Mesh(new THREE.CircleGeometry(radius, 64), discMat);
+        disc.rotation.x = -Math.PI / 2;
+        disc.position.set(center.x, center.y + 0.05, center.z);
+        group.add(disc);
+
+        const ringMat = new THREE.MeshBasicMaterial({
+            color: 0xb7ff63,
+            transparent: true,
+            opacity: 0.5,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+        const ring = new THREE.Mesh(new THREE.RingGeometry(radius - 0.35, radius, 64), ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(center.x, center.y + 0.07, center.z);
+        group.add(ring);
+
+        const light = new THREE.PointLight(0x8cff66, 2.2, Math.max(12, radius * 3));
+        light.position.set(center.x, center.y + 2.0, center.z);
+        renderer.mainScene.add(group);
+        renderer.mainScene.add(light);
+        toxinFields.set(key, { group, disc, ring, discMat, ringMat, light, endT });
+    };
+
+    const clearLocalBuffAura = (): void => {
+        if (!localBuffAura) return;
+        renderer.mainScene.remove(localBuffAura.group);
+        renderer.mainScene.remove(localBuffAura.light);
+        localBuffAura.innerRing.geometry.dispose();
+        localBuffAura.outerRing.geometry.dispose();
+        localBuffAura.innerMat.dispose();
+        localBuffAura.outerMat.dispose();
+        localBuffAura = null;
+    };
+
+    const ensureLocalBuffAura = (buffKey: string): void => {
+        const normalized = buffKey.trim().toUpperCase();
+        if (!normalized) {
+            clearLocalBuffAura();
+            return;
+        }
+        if (localBuffAura?.buffKey === normalized) {
+            return;
+        }
+        clearLocalBuffAura();
+        let color = 0x55ddff;
+        if (normalized.includes('FORGE')) color = 0xff9a52;
+        if (normalized.includes('TOXIN')) color = 0x8fff66;
+        if (normalized.includes('STAMPEDE')) color = 0xffd54a;
+        if (normalized.includes('SCRAP')) color = 0x59f5ff;
+
+        const group = new THREE.Group();
+        const innerMat = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.45,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+        const innerRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.9, 40), innerMat);
+        innerRing.rotation.x = -Math.PI / 2;
+        group.add(innerRing);
+
+        const outerMat = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.22,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+        const outerRing = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.35, 40), outerMat);
+        outerRing.rotation.x = -Math.PI / 2;
+        outerRing.position.y = 0.04;
+        group.add(outerRing);
+
+        const light = new THREE.PointLight(color, 1.4, 6);
+        renderer.mainScene.add(group);
+        renderer.mainScene.add(light);
+        localBuffAura = { group, innerRing, innerMat, outerRing, outerMat, light, buffKey: normalized };
+    };
 
     bridge.subscribeToGame((event) => {
         if (event.type === 'state_update') {
@@ -336,6 +597,65 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                     timeMs: performance.now(),
                 });
             }
+            return;
+        }
+
+        if (gameEvent.type === 'FORGE_LINK_PULSE' && 'data' in gameEvent) {
+            const signalEvent: any = gameEvent.data;
+            const sourcePos = getScenePositionForPlayerId(String(signalEvent.sourceVictimId ?? ''));
+            if (sourcePos) {
+                renderer.createHitEffect(sourcePos.clone(), new THREE.Vector3(0, 1, 0));
+                createPulseRingEffect(sourcePos, 0xff9a52, 2.2, 260);
+            }
+            for (const linkedPlayerId of Array.isArray(signalEvent.linkedPlayerIds) ? signalEvent.linkedPlayerIds : []) {
+                const linkedPos = getScenePositionForPlayerId(String(linkedPlayerId));
+                if (!linkedPos) continue;
+                renderer.createHitEffect(linkedPos.clone(), new THREE.Vector3(0, 1, 0));
+                createPulseRingEffect(linkedPos, 0xff9a52, 1.8, 240);
+                if (sourcePos) {
+                    renderer.createTracer(sourcePos.clone(), linkedPos.clone());
+                }
+            }
+            return;
+        }
+
+        if (gameEvent.type === 'STAMPEDE_KNOCK' && 'data' in gameEvent) {
+            const signalEvent: any = gameEvent.data;
+            const attackerPos = getScenePositionForPlayerId(String(signalEvent.attackerId ?? ''));
+            const victimPos = getScenePositionForPlayerId(String(signalEvent.victimId ?? ''));
+            if (victimPos) {
+                renderer.createHitEffect(victimPos.clone(), new THREE.Vector3(0, 1, 0));
+                createPulseRingEffect(victimPos, 0xffd54a, 2.8, 280);
+            }
+            if (attackerPos && victimPos) {
+                renderer.createTracer(attackerPos.clone(), victimPos.clone());
+            }
+            return;
+        }
+
+        if (gameEvent.type === 'TOXIN_START' && 'data' in gameEvent) {
+            const signalEvent: any = gameEvent.data;
+            spawnToxinField(
+                `toxin_${String(signalEvent.team ?? 'unknown')}`,
+                signalEvent.center,
+                Number(signalEvent.radius ?? 6),
+                Number(signalEvent.endT ?? (performance.now() + 8000)),
+            );
+            return;
+        }
+
+        if (gameEvent.type === 'TOXIN_END' && 'data' in gameEvent) {
+            const signalEvent: any = gameEvent.data;
+            clearToxinField(`toxin_${String(signalEvent.team ?? 'unknown')}`);
+            return;
+        }
+
+        if (gameEvent.type === 'DROP_BUFF_START' && 'data' in gameEvent) {
+            const signalEvent: any = gameEvent.data;
+            const localTeam = bridge.getState().localTeamId === 2 ? 'red' : 'blue';
+            if (String(signalEvent.team ?? '') === localTeam) {
+                createPulseRingEffect(playerPosition, 0x55ddff, 3.2, 360);
+            }
         }
     });
 
@@ -358,7 +678,12 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                     // Ignore local network entity updates for now to avoid snapbacks/dup visuals.
                     break;
                 }
-                ensureVisual(event.entityId, 2, getDesiredCharacterModel(event.entityId));
+                ensureVisual(
+                    event.entityId,
+                    getDesiredTeamId(event.entityId),
+                    getDesiredCharacterModel(event.entityId),
+                    getDesiredWeaponModel(event.entityId),
+                );
                 renderer.updateEntityTransform(event.entityId, event.position, event.rotation);
                 break;
         }
@@ -438,10 +763,22 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         // Safety: ensure local visual exists even if it was dropped.
         if (!renderer.hasEntityVisual(LOCAL_VISUAL_ID)) {
             renderer.setMinimapLocalEntityId(LOCAL_VISUAL_ID);
-            renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, 1, bridge.getState().selectedCharacterModelId);
+            renderer.createPlayerVisual(LOCAL_VISUAL_ID, Species.Urshari, bridge.getState().localTeamId ?? 1, bridge.getState().selectedCharacterModelId);
             console.log('Recreated local player visual');
         }
-        ensureVisual(LOCAL_VISUAL_ID, 1, bridge.getState().selectedCharacterModelId);
+        const liveState = bridge.getState();
+        const normalizedLocalDropBuff = String(liveState.signalActiveDropBuffName ?? '')
+            .trim()
+            .toUpperCase()
+            .replace(/[^A-Z0-9]+/g, '_');
+        const hasLocalStampede = normalizedLocalDropBuff.includes('STAMPEDE');
+        const hasLocalSkyRecon = normalizedLocalDropBuff.includes('SKY_EYE_RECON');
+        ensureVisual(
+            LOCAL_VISUAL_ID,
+            liveState.localTeamId ?? 1,
+            bridge.getState().selectedCharacterModelId,
+            bridge.getState().selectedWeaponModelId,
+        );
 
         // FPS counter
         frameCount++;
@@ -485,6 +822,15 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         // Get input state (only when pointer is locked)
         const preRoundActive = bridge.getState().preRoundActive;
         const rawMovement = input.getMovementInput();
+        const pendingWeaponSlot = input.consumeWeaponSlotRequest();
+        const pendingWeaponCycle = input.consumeWeaponCycleDirection();
+        if (!preRoundActive) {
+            if (pendingWeaponSlot === 0 || pendingWeaponSlot === 1) {
+                client.equipWeaponSlot(pendingWeaponSlot);
+            } else if (pendingWeaponCycle !== 0) {
+                client.cycleWeaponSlot(pendingWeaponCycle);
+            }
+        }
         const movement = preRoundActive
             ? { forward: false, backward: false, left: false, right: false, jump: false, crouch: false, sprint: false, dodge: false }
             : rawMovement;
@@ -537,7 +883,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             ? Math.floor(snapshotInfo.tick + (now - snapshotInfo.timeMs) / TICK_MS)
             : Math.floor(elapsedMs / TICK_MS);
         const currentTick = Math.max(estimatedServerTick, lastSentTick + 1);
-        const liveState = bridge.getState();
+        renderer.setMinimapLocalTeamId(liveState.localTeamId ?? 1);
         if (currentTick > lastSentTick && !liveState.isGameOver) {
             // Send inputs for each missing tick (use latest sampled input)
             for (let t = lastSentTick + 1; t <= currentTick; t++) {
@@ -571,10 +917,12 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             lastSentTick = currentTick;
         }
 
-        const interpolatedRemotes = bridge.getRemoteInterpolatedEntities(now, REMOTE_INTERPOLATION_DELAY_TICKS);
+        const interpolationDelayTicks = Math.max(2, Number(bridge.getState().netInterpolationDelayTicks ?? 7));
+        const interpolatedRemotes = bridge.getRemoteInterpolatedEntities(now, interpolationDelayTicks);
 
         // Update BVH character controller
         if (characterController) {
+            characterController.setExternalSpeedMultiplier(hasLocalStampede ? 1.5 : 1);
             // Update controller with input
             const lockInput = liveState.isGameOver || liveState.preRoundActive;
             characterController.update(deltaTime, {
@@ -649,7 +997,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
             const visualPos = characterController.copyVisualPosition(tmpVisualPos);
             const playerQuat = tmpPlayerQuat.setFromAxisAngle(upAxis, characterController.modelEulerY + MODEL_FORWARD_YAW);
 
-            const renderPos = bridge.worldToRenderPosPublic(visualPos, true) ?? visualPos;
+            const renderPos = bridge.worldToRenderPosPublic(visualPos) ?? visualPos;
             renderer.updateEntityTransform(
                 LOCAL_VISUAL_ID,
                 renderPos,
@@ -768,13 +1116,60 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
         renderer.setMinimapTarget(playerPosition, aim.yaw);
         }
 
+        ensureLocalBuffAura(normalizedLocalDropBuff);
+        if (localBuffAura) {
+            const auraPulse = 0.55 + ((Math.sin(now * 0.009) + 1) * 0.2);
+            localBuffAura.group.position.set(playerPosition.x, playerPosition.y + 0.08, playerPosition.z);
+            localBuffAura.group.rotation.y += deltaTime * 1.6;
+            localBuffAura.innerRing.scale.setScalar(0.92 + auraPulse * 0.24);
+            localBuffAura.outerRing.scale.setScalar(0.94 + auraPulse * 0.36);
+            localBuffAura.innerMat.opacity = 0.22 + auraPulse * 0.28;
+            localBuffAura.outerMat.opacity = 0.08 + auraPulse * 0.16;
+            localBuffAura.light.position.set(playerPosition.x, playerPosition.y + 1.1, playerPosition.z);
+            localBuffAura.light.intensity = 0.8 + auraPulse * 1.2;
+        }
+
+        for (let i = pulseRingEffects.length - 1; i >= 0; i--) {
+            const effect = pulseRingEffects[i]!;
+            const elapsedMs = now - effect.startMs;
+            const progress = Math.min(1, elapsedMs / effect.durationMs);
+            if (progress >= 1) {
+                renderer.mainScene.remove(effect.mesh);
+                effect.mesh.geometry.dispose();
+                effect.material.dispose();
+                pulseRingEffects.splice(i, 1);
+                continue;
+            }
+            const scale = 0.4 + (effect.maxScale * progress);
+            effect.mesh.scale.setScalar(scale);
+            effect.material.opacity = 0.8 * (1 - progress);
+        }
+
+        for (const [key, field] of toxinFields) {
+            if (now >= field.endT) {
+                clearToxinField(key);
+                continue;
+            }
+            const toxinPulse = 0.5 + 0.5 * Math.sin(now * 0.007);
+            field.ring.scale.setScalar(1 + toxinPulse * 0.08);
+            field.discMat.opacity = 0.1 + toxinPulse * 0.12;
+            field.ringMat.opacity = 0.28 + toxinPulse * 0.3;
+            field.light.intensity = 1.3 + toxinPulse * 1.1;
+        }
+
         // Update remote entities from buffered server poses (interpolation only)
         const nowMs = now;
         for (const [entityId, pose] of interpolatedRemotes) {
             if (deadEntities.has(entityId)) {
+                renderer.setEntityRevealHighlight(entityId, false);
                 continue;
             }
-            ensureVisual(entityId, 2, getDesiredCharacterModel(entityId));
+            ensureVisual(
+                entityId,
+                getDesiredTeamId(entityId),
+                getDesiredCharacterModel(entityId),
+                getDesiredWeaponModel(entityId),
+            );
 
             renderer.updateEntityTransform(entityId, pose.position, {
                 x: pose.rotation.x,
@@ -782,6 +1177,9 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                 z: pose.rotation.z,
                 w: pose.rotation.w,
             });
+            const entityTeamId = getDesiredTeamId(entityId);
+            const isEnemyReveal = hasLocalSkyRecon && entityTeamId !== (liveState.localTeamId ?? 1);
+            renderer.setEntityRevealHighlight(entityId, isEnemyReveal, 0x55ddff);
 
             let state = remoteAnimStates.get(entityId);
             if (!state) {
@@ -916,7 +1314,7 @@ export async function initializeGame(bridge: ReturnType<typeof createGameBridge>
                     origin: { x: shotOrigin.x, y: shotOrigin.y, z: shotOrigin.z },
                     dir: { x: shootDirection.x, y: shootDirection.y, z: shootDirection.z },
                     time: now,
-                    weaponId: 'smg',
+                    weaponId: stateNow.selectedWeaponModelId ?? 'smg1',
                 });
 
                 // Ensure aim pose plays while shooting even without ADS

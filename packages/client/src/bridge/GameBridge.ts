@@ -11,13 +11,15 @@ import type {
     EntityId,
     PlayerId,
     TeamId,
-    GameEvent,
+    GameEvent as SharedGameEvent,
     Vector3,
     Quaternion,
     LobbyState,
+    Tick,
 } from '@snapshot/shared';
-import type { InputAck, Tick } from '@snapshot/shared/simulation';
+import type { InputAck } from '@snapshot/shared/simulation';
 import { TICK_MS } from '@snapshot/shared/simulation';
+import type { GameEvent as SignalProtocolGameEvent } from '../types/SignalProtocol';
 
 // =============================================================================
 // TYPES
@@ -33,6 +35,9 @@ export interface UIGameState {
 
     /** Local player entity ID */
     localPlayerEntityId: EntityId | null;
+
+    /** Local player's team */
+    localTeamId: TeamId;
 
     /** Current health (0-max) */
     health: number;
@@ -118,6 +123,44 @@ export interface UIGameState {
     preRoundDurationSec: number;
     availableCharacterModelIds: string[];
     selectedCharacterModelId: string;
+    selectedWeaponModelId: string;
+
+    /** Signal Protocol HUD hooks */
+    signalNextDropSec: number;
+    signalExtractionPct: number;
+    signalExtractionStalled: boolean;
+    signalActiveBuffs: string[];
+    signalActiveDropBuffName: string | null;
+    signalActiveDropBuffRemainingSec: number;
+    signalSuddenDeathStatus: 'idle' | 'warning' | 'active';
+    signalZoneNumber: number;
+    signalZoneState: 'PREMATCH_LOADOUT' | 'COUNTDOWN' | 'ACTIVE' | 'POSTMATCH';
+    signalZoneTimerSec: number;
+    signalZoneOwnerLabel: string;
+    signalSnapBackend: string;
+    signalSnapSeq: number;
+    signalSnapStateHash: string;
+    signalSnapSignalBlue: number;
+    signalSnapSignalRed: number;
+    signalSnapActiveZone: number;
+    signalSnapZonePhase: 'COUNTDOWN' | 'ACTIVE';
+    signalSnapZoneRemainingSec: number;
+    signalSnapActiveDropModifierId: string | null;
+    signalAuthoritySource: string;
+    signalAuthorityLatestCommitSeq: number;
+    signalAuthorityLastCommitSignature: string | null;
+    signalAuthorityMatchId: string | null;
+    signalAuthorityDelegated: boolean;
+
+    /** Lightweight net debug for PeerJS TDM */
+    netRole: 'offline' | 'socket' | 'p2p_host' | 'p2p_client';
+    netSnapshotRate: number;
+    netDroppedSnapshots: number;
+    netEventBacklog: number;
+    netBytesInPerSec: number;
+    netBytesOutPerSec: number;
+    netSendBacklogBytes: number;
+    netInterpolationDelayTicks: number;
 }
 
 export interface KillFeedEntry {
@@ -133,9 +176,11 @@ export interface KillFeedEntry {
 }
 
 /** Events from game to UI */
+type BridgeGameEvent = SharedGameEvent | SignalProtocolGameEvent;
+
 export type GameToUIEvent =
     | { type: 'state_update'; state: Partial<UIGameState> }
-    | { type: 'game_event'; event: GameEvent }
+    | { type: 'game_event'; event: BridgeGameEvent }
     | { type: 'connected' }
     | { type: 'disconnected' }
     | { type: 'match_start' }
@@ -145,6 +190,7 @@ export type GameToUIEvent =
     | { type: 'damage_indicator'; direction: Vector3; amount: number }
     | { type: 'hit_marker'; critical: boolean }
     | { type: 'lobby_update'; state: import('@snapshot/shared').LobbyState }
+    | { type: 'social_update'; state: any }
     | { type: 'game_message'; message: string; severity?: 'info' | 'error' | 'success' | 'warning' };
 
 /** Events from UI to game */
@@ -155,7 +201,7 @@ export type UIToGameEvent =
     | { type: 'pause_game' }
     | { type: 'resume_game' }
     | { type: 'quit_match' }
-    | { type: 'join_queue'; mode: string; ruleset: string; wagerAmountSol?: number }
+    | { type: 'join_queue'; mode: string; ruleset: string; transport?: 'socket' | 'p2p'; wagerAmountSol?: number }
     | { type: 'select_character'; characterModelId: string }
     | { type: 'wager_locked'; matchId: string }
     | { type: 'leave_queue' }
@@ -193,6 +239,7 @@ export class GameBridge {
     private remotePlayerRootsByPlayerId: Map<string, { position: Vector3; lastSeen: number }> = new Map();
     private remotePoseBuffers: Map<PlayerId, PoseSample[]> = new Map();
     private remoteGroundedByPlayerId: Map<PlayerId, boolean> = new Map();
+    private lastRemoteExtrapolationMs = 0;
     private interpolatedEntitiesOut: Map<EntityId, { position: Vector3; rotation: Quaternion; isGrounded?: boolean }> = new Map();
     private interpolatedEntitiesSeen: Set<EntityId> = new Set();
     private serverCorrectionTarget: Vector3 | null = null;
@@ -201,17 +248,22 @@ export class GameBridge {
     private lastKillFeedAt = 0;
     private preRoundEndTick: Tick | null = null;
     private preRoundEndTimeMs: number | null = null;
+    private entityTeamIds: Map<EntityId, TeamId> = new Map();
     private entityCharacterModelIds: Map<EntityId, string> = new Map();
     private selectedCharacterByPlayerId: Map<PlayerId, string> = new Map();
+    private entityWeaponModelIds: Map<EntityId, string> = new Map();
+    private selectedWeaponByPlayerId: Map<PlayerId, string> = new Map();
 
     private static readonly REMOTE_POSE_BUFFER_MAX = 10;
 
     // Match data received from server (spawn positions, opponents)
     private matchData: {
         spawnPosition?: { x: number; y: number; z: number };
+        teamId?: TeamId;
+        mode?: string;
         opponent?: string;
         opponentSpawnPosition?: { x: number; y: number; z: number } | null;
-        allPlayers?: { playerId: string; spawnPosition: { x: number; y: number; z: number } }[];
+        allPlayers?: { playerId: string; teamId?: TeamId; spawnPosition: { x: number; y: number; z: number } }[];
     } | null = null;
     private lastSnapshotTick: import('@snapshot/shared/simulation').Tick | null = null;
     private lastSnapshotTimeMs: number | null = null;
@@ -221,6 +273,7 @@ export class GameBridge {
         isRunning: false,
         isConnected: false,
         localPlayerEntityId: null,
+        localTeamId: 1 as TeamId,
         health: 0,
         maxHealth: 100,
         shield: 0,
@@ -252,8 +305,43 @@ export class GameBridge {
         preRoundDurationSec: 10,
         availableCharacterModelIds: ['assasin', 'grizzly', 'kodiak', 'panda'],
         selectedCharacterModelId: 'assasin',
+        selectedWeaponModelId: 'smg1',
+        signalNextDropSec: 0,
+        signalExtractionPct: 0,
+        signalExtractionStalled: false,
+        signalActiveBuffs: [],
+        signalActiveDropBuffName: null,
+        signalActiveDropBuffRemainingSec: 0,
+        signalSuddenDeathStatus: 'idle',
+        signalZoneNumber: 1,
+        signalZoneState: 'COUNTDOWN',
+        signalZoneTimerSec: 0,
+        signalZoneOwnerLabel: 'NEUTRAL',
+        signalSnapBackend: 'local',
+        signalSnapSeq: 0,
+        signalSnapStateHash: '',
+        signalSnapSignalBlue: 0,
+        signalSnapSignalRed: 0,
+        signalSnapActiveZone: 1,
+        signalSnapZonePhase: 'COUNTDOWN',
+        signalSnapZoneRemainingSec: 0,
+        signalSnapActiveDropModifierId: null,
+        signalAuthoritySource: 'local',
+        signalAuthorityLatestCommitSeq: 0,
+        signalAuthorityLastCommitSignature: null,
+        signalAuthorityMatchId: null,
+        signalAuthorityDelegated: false,
+        netRole: 'offline',
+        netSnapshotRate: 0,
+        netDroppedSnapshots: 0,
+        netEventBacklog: 0,
+        netBytesInPerSec: 0,
+        netBytesOutPerSec: 0,
+        netSendBacklogBytes: 0,
+        netInterpolationDelayTicks: 7,
     };
     private lobbyState: LobbyState | null = null;
+    private socialState: any | null = null;
 
     /**
      * Get current game state (for React).
@@ -276,13 +364,35 @@ export class GameBridge {
         return this.playerIdToEntityId.get(playerId) ?? null;
     }
 
-    registerPlayerEntity(playerId: PlayerId, entityId: EntityId, characterModelId: string = 'assasin'): void {
+    registerPlayerEntity(
+        playerId: PlayerId,
+        entityId: EntityId,
+        characterModelId: string = 'assasin',
+        weaponModelId: string = 'smg1',
+        teamId?: TeamId,
+    ): void {
         this.playerIdToEntityId.set(playerId, entityId);
         this.entityCharacterModelIds.set(entityId, characterModelId);
+        this.entityWeaponModelIds.set(entityId, weaponModelId);
+        if (typeof teamId === 'number') {
+            this.entityTeamIds.set(entityId, teamId);
+        }
+    }
+
+    setEntityTeamId(entityId: EntityId, teamId: TeamId): void {
+        this.entityTeamIds.set(entityId, teamId);
     }
 
     getEntityCharacterModelId(entityId: EntityId): string | null {
         return this.entityCharacterModelIds.get(entityId) ?? null;
+    }
+
+    getEntityTeamId(entityId: EntityId): TeamId | null {
+        return this.entityTeamIds.get(entityId) ?? null;
+    }
+
+    getEntityWeaponModelId(entityId: EntityId): string | null {
+        return this.entityWeaponModelIds.get(entityId) ?? null;
     }
 
     getLocalPlayerId(): PlayerId | null {
@@ -353,7 +463,12 @@ export class GameBridge {
         this.setLocalRenderPos(position);
     }
 
-    processNetPose(event: { type: 'net_pose'; playerId: PlayerId; position: Vector3; rotation?: Quaternion; tick: Tick }): void {
+    getLocalRenderPos(): Vector3 | null {
+        if (!this.localRenderPos) return null;
+        return { x: this.localRenderPos.x, y: this.localRenderPos.y, z: this.localRenderPos.z };
+    }
+
+    processNetPose(event: { type: 'net_pose'; playerId: PlayerId; position: Vector3; rotation?: Quaternion; velocity?: Vector3; tick: Tick }): void {
         if (this.localPlayerId && event.playerId === this.localPlayerId) {
             this.serverSelfPos = { x: event.position.x, y: event.position.y, z: event.position.z };
             if (event.rotation) {
@@ -367,11 +482,14 @@ export class GameBridge {
             });
             return;
         }
-        this.remotePoses.set(event.playerId, {
+        const remotePose: { position: Vector3; rotation?: Quaternion; tick: Tick } = {
             position: event.position,
-            rotation: event.rotation,
             tick: event.tick,
-        });
+        };
+        if (event.rotation) {
+            remotePose.rotation = event.rotation;
+        }
+        this.remotePoses.set(event.playerId, remotePose);
         this.serverRemotePos.set(event.playerId, { x: event.position.x, y: event.position.y, z: event.position.z });
         this.lastServerPosByPlayerId.set(event.playerId, {
             x: event.position.x,
@@ -380,17 +498,17 @@ export class GameBridge {
             t: performance.now(),
         });
         this.ensureRemoteRoot(event.playerId, event.position);
-        this.pushRemotePose(event.playerId, event.position, event.rotation ?? { x: 0, y: 0, z: 0, w: 1 }, event.tick);
+        this.pushRemotePose(event.playerId, event.position, event.rotation ?? { x: 0, y: 0, z: 0, w: 1 }, event.tick, event.velocity);
         this.cleanupRemoteRoots();
     }
 
-    private worldToRenderPos(position?: Vector3, isLocal: boolean = false): Vector3 | undefined {
+    private worldToRenderPos(position?: Vector3): Vector3 | undefined {
         if (!position) return undefined;
         return { x: position.x, y: position.y, z: position.z };
     }
 
-    worldToRenderPosPublic(position?: Vector3, isLocal: boolean = false): Vector3 | undefined {
-        return this.worldToRenderPos(position, isLocal);
+    worldToRenderPosPublic(position?: Vector3): Vector3 | undefined {
+        return this.worldToRenderPos(position);
     }
 
 
@@ -433,7 +551,7 @@ export class GameBridge {
     /**
      * Emit a game event to UI.
      */
-    emitGameEvent(event: GameEvent): void {
+    emitGameEvent(event: BridgeGameEvent): void {
         this.emitToUI({ type: 'game_event', event });
 
         // Handle specific events (non-killfeed logic only)
@@ -443,7 +561,7 @@ export class GameBridge {
      * Notify UI of connection.
      */
     notifyConnected(): void {
-        this.updateState({ isConnected: true });
+        this.updateState({ isConnected: true, netRole: 'socket' });
         this.emitToUI({ type: 'connected' });
     }
 
@@ -451,13 +569,25 @@ export class GameBridge {
      * Notify UI of disconnection.
      */
     notifyDisconnected(): void {
-        this.updateState({ isConnected: false, isRunning: false });
+        this.updateState({
+            isConnected: false,
+            isRunning: false,
+            netRole: 'offline',
+            netSnapshotRate: 0,
+            netDroppedSnapshots: 0,
+            netEventBacklog: 0,
+            netBytesInPerSec: 0,
+            netBytesOutPerSec: 0,
+            netSendBacklogBytes: 0,
+        });
         this.entityTransforms.clear();
         this.remotePoseBuffers.clear();
         this.remoteGroundedByPlayerId.clear();
         this.playerIdToEntityId.clear();
         this.entityCharacterModelIds.clear();
         this.selectedCharacterByPlayerId.clear();
+        this.entityWeaponModelIds.clear();
+        this.selectedWeaponByPlayerId.clear();
         this.preRoundEndTick = null;
         this.preRoundEndTimeMs = null;
         this.lastSnapshotTick = null;
@@ -472,6 +602,19 @@ export class GameBridge {
     updateLobbyState(state: import('@snapshot/shared').LobbyState): void {
         this.lobbyState = state;
         this.emitToUI({ type: 'lobby_update', state });
+    }
+
+    getLobbyState(): LobbyState | null {
+        return this.lobbyState;
+    }
+
+    updateSocialState(state: any): void {
+        this.socialState = state;
+        this.emitToUI({ type: 'social_update', state });
+    }
+
+    getSocialState(): any | null {
+        return this.socialState;
     }
 
     addKillFeedByPlayerIds(killerId: PlayerId | null, victimId: PlayerId | null, weapon: string): void {
@@ -518,9 +661,11 @@ export class GameBridge {
      */
     notifyMatchStart(data?: {
         spawnPosition?: { x: number; y: number; z: number };
+        teamId?: TeamId;
+        mode?: string;
         opponent?: string;
         opponentSpawnPosition?: { x: number; y: number; z: number } | null;
-        allPlayers?: { playerId: string; spawnPosition: { x: number; y: number; z: number } }[];
+        allPlayers?: { playerId: string; teamId?: TeamId; spawnPosition: { x: number; y: number; z: number } }[];
     }): void {
         // Store match data for use by initializeGame
         if (data) {
@@ -530,6 +675,7 @@ export class GameBridge {
         this.remotePoseBuffers.clear();
         this.remoteGroundedByPlayerId.clear();
         this.playerIdToEntityId.clear();
+        this.entityTeamIds.clear();
         this.entityCharacterModelIds.clear();
         this.selectedCharacterByPlayerId.clear();
         this.lastSnapshotTick = null;
@@ -542,7 +688,10 @@ export class GameBridge {
             preRoundActive: false,
             preRoundRemainingSec: 0,
             preRoundDurationSec: 10,
+            localTeamId: data?.teamId ?? this.currentState.localTeamId,
             availableCharacterModelIds: ['assasin', 'grizzly', 'kodiak', 'panda'],
+            netDroppedSnapshots: 0,
+            netEventBacklog: 0,
         });
         this.emitToUI({ type: 'match_start', ...data });
     }
@@ -559,6 +708,7 @@ export class GameBridge {
         this.remotePlayerRootsByPlayerId.clear();
         this.remotePoses.clear();
         this.lastServerPosByPlayerId.clear();
+        this.entityTeamIds.clear();
         this.entityCharacterModelIds.clear();
         this.selectedCharacterByPlayerId.clear();
         this.preRoundEndTick = null;
@@ -570,10 +720,18 @@ export class GameBridge {
         this.lastSnapshotTimeMs = null;
         this.lastInputAck = null;
         this.localPlayerId = null;
+        this.updateState({ localTeamId: 1 as TeamId });
     }
 
     notifyWagerLock(matchId: string, wagerAmountSol: number, opponentWallet?: string, lockRole?: 'init' | 'join'): void {
-        this.emitToUI({ type: 'wager_lock', matchId, wagerAmountSol, opponentWallet, lockRole });
+        const event: GameToUIEvent = { type: 'wager_lock', matchId, wagerAmountSol };
+        if (opponentWallet) {
+            event.opponentWallet = opponentWallet;
+        }
+        if (lockRole) {
+            event.lockRole = lockRole;
+        }
+        this.emitToUI(event);
     }
 
     notifyPreRoundStart(data: {
@@ -613,31 +771,49 @@ export class GameBridge {
         }
     }
 
+    notifyWeaponSelected(playerId: PlayerId, weaponModelId: string): void {
+        this.selectedWeaponByPlayerId.set(playerId, weaponModelId);
+        const entityId = this.playerIdToEntityId.get(playerId);
+        if (entityId !== undefined) {
+            this.entityWeaponModelIds.set(entityId as any, weaponModelId);
+        }
+        if (this.localPlayerId === playerId) {
+            this.updateState({ selectedWeaponModelId: weaponModelId });
+        }
+    }
+
     /**
      * Process a full world snapshot from server.
      */
     processSnapshot(snapshot: import('@snapshot/shared/simulation').Snapshot): void {
         this.lastSnapshotTick = snapshot.tick;
         this.lastSnapshotTimeMs = performance.now();
-        this.updatePreRoundFromTick(snapshot.tick);
+        this.updatePreRoundFromTick(snapshot.tick as unknown as Tick);
         this.resolveLocalEntityId(snapshot);
 
         // Here we could perform reconciliation if we had a local simulation.
         // For now, we update the UI/Renderer with entity positions.
         for (const entity of snapshot.entities) {
-            const entityId = Number(entity.id);
+            const entityId = Number(entity.id) as EntityId;
             const playerId = entity.player?.playerId;
             if (playerId) {
-                this.playerIdToEntityId.set(playerId, entityId as any);
+                this.playerIdToEntityId.set(playerId as PlayerId, entityId);
+                if (entity.player?.teamId === 1 || entity.player?.teamId === 2) {
+                    const teamId = entity.player.teamId as TeamId;
+                    this.entityTeamIds.set(entityId, teamId);
+                    if (this.localPlayerId && (playerId as PlayerId) === this.localPlayerId) {
+                        this.updateState({ localTeamId: teamId });
+                    }
+                }
                 if (entity.player?.characterModelId) {
-                    this.selectedCharacterByPlayerId.set(playerId, entity.player.characterModelId);
-                    this.entityCharacterModelIds.set(entityId as any, entity.player.characterModelId);
-                    if (this.localPlayerId && playerId === this.localPlayerId) {
+                    this.selectedCharacterByPlayerId.set(playerId as PlayerId, entity.player.characterModelId);
+                    this.entityCharacterModelIds.set(entityId, entity.player.characterModelId);
+                    if (this.localPlayerId && (playerId as PlayerId) === this.localPlayerId) {
                         this.updateState({ selectedCharacterModelId: entity.player.characterModelId });
                     }
                 }
             }
-            if (this.localPlayerId && playerId === this.localPlayerId) {
+            if (this.localPlayerId && (playerId as PlayerId | undefined) === this.localPlayerId) {
                 if (entity.transform?.position) {
                     this.serverSelfPos = {
                         x: entity.transform.position.x,
@@ -652,12 +828,14 @@ export class GameBridge {
                             w: entity.transform.rotation.w,
                         };
                     }
-                    this.lastServerPosByPlayerId.set(playerId, {
-                        x: entity.transform.position.x,
-                        y: entity.transform.position.y,
-                        z: entity.transform.position.z,
-                        t: performance.now(),
-                    });
+                    if (playerId) {
+                        this.lastServerPosByPlayerId.set(playerId, {
+                            x: entity.transform.position.x,
+                            y: entity.transform.position.y,
+                            z: entity.transform.position.z,
+                            t: performance.now(),
+                        });
+                    }
                 }
                 if (entity.health) {
                     this.updateState({
@@ -679,13 +857,13 @@ export class GameBridge {
                 continue;
             }
             if (playerId && entity.transform?.position) {
-                this.remotePoses.set(playerId, {
+                this.remotePoses.set(playerId as PlayerId, {
                     position: entity.transform.position,
                     rotation: entity.transform.rotation ?? { x: 0, y: 0, z: 0, w: 1 },
-                    tick: snapshot.tick,
+                    tick: snapshot.tick as unknown as Tick,
                 });
                 if (entity.physics?.isGrounded !== undefined) {
-                    this.remoteGroundedByPlayerId.set(playerId, entity.physics.isGrounded);
+                    this.remoteGroundedByPlayerId.set(playerId as PlayerId, entity.physics.isGrounded);
                 }
                 this.lastServerPosByPlayerId.set(playerId, {
                     x: entity.transform.position.x,
@@ -693,39 +871,39 @@ export class GameBridge {
                     z: entity.transform.position.z,
                     t: performance.now(),
                 });
-                this.ensureRemoteRoot(playerId, entity.transform.position);
+                this.ensureRemoteRoot(playerId as PlayerId, entity.transform.position);
                 this.pushRemotePose(
-                    playerId,
+                    playerId as PlayerId,
                     entity.transform.position,
                     entity.transform.rotation ?? { x: 0, y: 0, z: 0, w: 1 },
-                    snapshot.tick
+                    snapshot.tick as unknown as Tick,
                 );
-                if (this.pendingPlayerDeaths.has(playerId)) {
-                    const killerId = this.pendingPlayerDeaths.get(playerId) ?? null;
+                if (this.pendingPlayerDeaths.has(playerId as PlayerId)) {
+                    const killerId = this.pendingPlayerDeaths.get(playerId as PlayerId) ?? null;
                     const killerEntityId = killerId ? this.getEntityIdForPlayerId(killerId) : null;
                     this.emitGameEvent({
                         type: 'player_died',
-                        entityId: entityId as any,
+                        entityId,
                         killerId: killerEntityId ?? null,
                         weapon: 'smg',
                     });
-                    this.pendingPlayerDeaths.delete(playerId);
+                    this.pendingPlayerDeaths.delete(playerId as PlayerId);
                 }
                 continue;
             }
-            const position = this.worldToRenderPos(entity.transform?.position ?? { x: 0, y: 0, z: 0 }, false);
+            const position = this.worldToRenderPos(entity.transform?.position ?? { x: 0, y: 0, z: 0 })!;
             const rotation = entity.transform?.rotation ?? { x: 0, y: 0, z: 0, w: 1 };
             const velocity = entity.physics?.velocity;
             const isGrounded = entity.physics?.isGrounded;
-            this.entityTransforms.set(entityId as any, { position, rotation, velocity, isGrounded });
+            this.entityTransforms.set(entityId, { position, rotation, velocity, isGrounded });
             this.emitToGame({
                 type: 'entity_move',
-                entityId: entityId as any,
+                entityId,
                 position,
                 rotation,
                 velocity,
                 isGrounded,
-                lastProcessedInputTick: entity.player?.lastProcessedInputTick
+                lastProcessedInputTick: entity.player?.lastProcessedInputTick as unknown as Tick | undefined,
             });
         }
     }
@@ -770,7 +948,7 @@ export class GameBridge {
         if (resolvedEntityId === null && this.matchData?.spawnPosition && snapshot.entities.length > 0) {
             // Fallback: pick entity closest to our spawn position.
             const spawn = this.matchData.spawnPosition;
-            let best = snapshot.entities[0];
+            let best = snapshot.entities[0] ?? null;
             let bestDist = Infinity;
             for (const entity of snapshot.entities) {
                 const pos = entity.transform?.position;
@@ -784,7 +962,9 @@ export class GameBridge {
                     best = entity;
                 }
             }
-            resolvedEntityId = Number(best.id) as any;
+            if (best) {
+                resolvedEntityId = Number(best.id) as EntityId;
+            }
         }
 
         if (resolvedEntityId === null && snapshot.entities.length === 1) {
@@ -821,9 +1001,10 @@ export class GameBridge {
     processDelta(delta: import('@snapshot/shared/simulation').SnapshotDelta): void {
         this.lastSnapshotTick = delta.targetTick;
         this.lastSnapshotTimeMs = performance.now();
-        this.updatePreRoundFromTick(delta.targetTick);
+        this.updatePreRoundFromTick(delta.targetTick as unknown as Tick);
         for (const removedId of delta.removedEntityIds) {
             this.entityTransforms.delete(removedId as any);
+            this.entityTeamIds.delete(removedId as any);
             const playerId = this.getPlayerIdForEntity(removedId as any);
             if (playerId) {
                 this.remotePoseBuffers.delete(playerId);
@@ -835,27 +1016,28 @@ export class GameBridge {
         }
         // Apply changes from delta
         for (const entityDelta of delta.changedEntities) {
-            if (this.currentState.localPlayerEntityId !== null && entityDelta.id === this.currentState.localPlayerEntityId) {
-                if (entityDelta.health) {
+            const entityId = Number(entityDelta.id) as EntityId;
+            if (this.currentState.localPlayerEntityId !== null && entityId === this.currentState.localPlayerEntityId) {
+                if (entityDelta.health !== undefined || entityDelta.shield !== undefined) {
                     this.updateState({
-                        health: entityDelta.health.health ?? this.currentState.health,
-                        shield: entityDelta.health.shield ?? this.currentState.shield,
+                        health: entityDelta.health ?? this.currentState.health,
+                        shield: entityDelta.shield ?? this.currentState.shield,
                     });
                 }
-                if (entityDelta.weapon) {
+                if (entityDelta.ammo !== undefined || entityDelta.isReloading !== undefined) {
                     this.updateState({
-                        ammo: entityDelta.weapon.ammo ?? this.currentState.ammo,
-                        isReloading: entityDelta.weapon.isReloading ?? this.currentState.isReloading,
+                        ammo: entityDelta.ammo ?? this.currentState.ammo,
+                        isReloading: entityDelta.isReloading ?? this.currentState.isReloading,
                     });
                 }
-                if (entityDelta.player?.isAlive !== undefined) {
-                    this.updateState({ isDead: !entityDelta.player.isAlive });
+                if (entityDelta.isAlive !== undefined) {
+                    this.updateState({ isDead: !entityDelta.isAlive });
                 }
                 continue;
             }
-            const cached = this.entityTransforms.get(entityDelta.id as any);
+            const cached = this.entityTransforms.get(entityId);
             const position = entityDelta.position ?? cached?.position;
-            const playerId = this.getPlayerIdForEntity(entityDelta.id as any);
+            const playerId = this.getPlayerIdForEntity(entityId);
             const lastRemote = playerId ? this.remotePoses.get(playerId) : undefined;
             const rotation = entityDelta.rotation ?? lastRemote?.rotation ?? cached?.rotation;
             const velocity = entityDelta.velocity ?? cached?.velocity;
@@ -867,27 +1049,27 @@ export class GameBridge {
                 this.remotePoses.set(playerId, {
                     position,
                     rotation,
-                    tick: delta.targetTick,
+                    tick: delta.targetTick as unknown as Tick,
                 });
                 if (this.pendingPlayerDeaths.has(playerId)) {
                     const killerId = this.pendingPlayerDeaths.get(playerId) ?? null;
                     const killerEntityId = killerId ? this.getEntityIdForPlayerId(killerId) : null;
                     this.emitGameEvent({
                         type: 'player_died',
-                        entityId: entityDelta.id as any,
+                        entityId,
                         killerId: killerEntityId ?? null,
                         weapon: 'smg',
                     });
                     this.pendingPlayerDeaths.delete(playerId);
                 }
-                this.pushRemotePose(playerId, position, rotation, delta.targetTick);
+                this.pushRemotePose(playerId, position, rotation, delta.targetTick as unknown as Tick);
                 continue;
             }
             if (position && rotation) {
-                this.entityTransforms.set(entityDelta.id as any, { position, rotation, velocity, isGrounded });
+                this.entityTransforms.set(entityId, { position, rotation, velocity, isGrounded });
                 this.emitToGame({
                     type: 'entity_move',
-                    entityId: entityDelta.id as any,
+                    entityId,
                     position,
                     rotation,
                     velocity,
@@ -932,7 +1114,7 @@ export class GameBridge {
     processInputAck(ack: InputAck): void {
         this.lastInputAck = {
             seq: ack.lastProcessedSequence,
-            tick: ack.processedAtTick,
+            tick: ack.processedAtTick as unknown as Tick,
             timeMs: performance.now(),
         };
     }
@@ -1077,6 +1259,7 @@ export class GameBridge {
             : null;
         const renderTick = estimatedServerTick !== null ? estimatedServerTick - delayTicks : null;
         const renderTime = nowMs - delayTicks * TICK_MS;
+        let maxExtrapolationMs = 0;
 
         for (const [playerId, buffer] of this.remotePoseBuffers) {
             const entityId = this.playerIdToEntityId.get(playerId);
@@ -1084,61 +1267,54 @@ export class GameBridge {
 
             const pose = interpolatePoseSamples(buffer, renderTime, renderTick ?? undefined);
             if (!pose) continue;
+            const latest = buffer[buffer.length - 1];
+            if (latest) {
+                const extrapMs = Math.max(0, renderTime - latest.t);
+                if (extrapMs > maxExtrapolationMs) maxExtrapolationMs = extrapMs;
+            }
 
             const position = { x: pose.x, y: pose.y, z: pose.z };
             const rotation = { x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw };
             const isGrounded = this.remoteGroundedByPlayerId.get(playerId);
 
-            const existingRemoteRender = this.remoteRenderPos.get(playerId);
-            if (existingRemoteRender) {
-                existingRemoteRender.x = position.x;
-                existingRemoteRender.y = position.y;
-                existingRemoteRender.z = position.z;
-            } else {
-                this.remoteRenderPos.set(playerId, position);
-            }
+            this.remoteRenderPos.set(playerId, position);
 
-            const existingOut = out.get(entityId as any);
-            if (existingOut) {
-                existingOut.position.x = position.x;
-                existingOut.position.y = position.y;
-                existingOut.position.z = position.z;
-                existingOut.rotation.x = rotation.x;
-                existingOut.rotation.y = rotation.y;
-                existingOut.rotation.z = rotation.z;
-                existingOut.rotation.w = rotation.w;
-                if (isGrounded === undefined) {
-                    delete (existingOut as any).isGrounded;
-                } else {
-                    existingOut.isGrounded = isGrounded;
-                }
-            } else {
-                const nextOut: { position: Vector3; rotation: Quaternion; isGrounded?: boolean } = {
-                    position,
-                    rotation,
-                };
-                if (isGrounded !== undefined) {
-                    nextOut.isGrounded = isGrounded;
-                }
-                out.set(entityId as any, nextOut);
+            const nextOut: { position: Vector3; rotation: Quaternion; isGrounded?: boolean } = {
+                position,
+                rotation,
+            };
+            if (isGrounded !== undefined) {
+                nextOut.isGrounded = isGrounded;
             }
-            seen.add(entityId as any);
+            out.set(entityId, nextOut);
+            seen.add(entityId);
         }
 
         for (const entityId of out.keys()) {
-            if (!seen.has(entityId as any)) {
+            if (!seen.has(entityId)) {
                 out.delete(entityId);
             }
         }
 
+        this.lastRemoteExtrapolationMs = maxExtrapolationMs;
         return out;
     }
 
-    private pushRemotePose(playerId: PlayerId, position: Vector3, rotation: Quaternion, serverTick?: Tick): void {
+    getNetInterpolationStats(): { extrapolationMs: number } {
+        return {
+            extrapolationMs: this.lastRemoteExtrapolationMs,
+        };
+    }
+
+    private pushRemotePose(playerId: PlayerId, position: Vector3, rotation: Quaternion, serverTick?: Tick, velocity?: Vector3): void {
         if (this.localPlayerId && playerId === this.localPlayerId) return;
         const now = performance.now();
         const buffer = this.remotePoseBuffers.get(playerId) ?? [];
-        buffer.push({
+        const prev = buffer.length > 0 ? buffer[buffer.length - 1] : null;
+        const derivedVx = prev ? (position.x - prev.x) / Math.max(1e-3, (now - prev.t) / 1000) : 0;
+        const derivedVy = prev ? (position.y - prev.y) / Math.max(1e-3, (now - prev.t) / 1000) : 0;
+        const derivedVz = prev ? (position.z - prev.z) / Math.max(1e-3, (now - prev.t) / 1000) : 0;
+        const sample: PoseSample = {
             t: now,
             x: position.x,
             y: position.y,
@@ -1147,8 +1323,14 @@ export class GameBridge {
             qy: rotation.y,
             qz: rotation.z,
             qw: rotation.w,
-            serverTick,
-        });
+            vx: velocity?.x ?? derivedVx,
+            vy: velocity?.y ?? derivedVy,
+            vz: velocity?.z ?? derivedVz,
+        };
+        if (serverTick !== undefined) {
+            sample.serverTick = serverTick as unknown as number;
+        }
+        buffer.push(sample);
         if (buffer.length > GameBridge.REMOTE_POSE_BUFFER_MAX) {
             buffer.splice(0, buffer.length - GameBridge.REMOTE_POSE_BUFFER_MAX);
         }
@@ -1196,12 +1378,18 @@ type PoseSample = {
     qy: number;
     qz: number;
     qw: number;
+    vx?: number;
+    vy?: number;
+    vz?: number;
     serverTick?: number;
     serverT?: number;
 };
 
 function interpolatePoseSamples(samples: PoseSample[], renderTime: number, renderTick?: number): PoseSample | null {
     if (samples.length === 0) return null;
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    if (!first || !last) return null;
 
     if (renderTick !== undefined) {
         let firstTickSample: PoseSample | null = null;
@@ -1253,17 +1441,28 @@ function interpolatePoseSamples(samples: PoseSample[], renderTime: number, rende
         }
     }
 
-    if (renderTime <= samples[0].t) {
-        return samples[0];
+    if (renderTime <= first.t) {
+        return first;
     }
-    const last = samples[samples.length - 1];
     if (renderTime >= last.t) {
+        const dtMs = renderTime - last.t;
+        if (dtMs <= 120) {
+            const dt = dtMs / 1000;
+            return {
+                ...last,
+                t: renderTime,
+                x: last.x + (last.vx ?? 0) * dt,
+                y: last.y + (last.vy ?? 0) * dt,
+                z: last.z + (last.vz ?? 0) * dt,
+            };
+        }
         return last;
     }
 
     for (let i = 0; i < samples.length - 1; i++) {
         const a = samples[i];
         const b = samples[i + 1];
+        if (!a || !b) continue;
         if (renderTime >= a.t && renderTime <= b.t) {
             const span = b.t - a.t;
             const alpha = span > 0 ? (renderTime - a.t) / span : 0;

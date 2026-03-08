@@ -1,0 +1,238 @@
+{
+  "metadata": {
+    "version": 4.5,
+    "type": "Object",
+    "generator": "Object3D.toJSON"
+  },
+  "geometries": [
+    {
+      "uuid": "2d88031a-8298-406f-bb77-a18b8b5257a2",
+      "type": "RingGeometry",
+      "innerRadius": 0.28,
+      "outerRadius": 0.5,
+      "thetaSegments": 20,
+      "phiSegments": 1,
+      "thetaStart": 0,
+      "thetaLength": 6.283185307179586
+    }
+  ],
+  "materials": [
+    {
+      "uuid": "44d53d32-8284-462f-8996-a33846a44434",
+      "type": "MeshBasicMaterial",
+      "color": 4774143,
+      "reflectivity": 1,
+      "refractionRatio": 0.98,
+      "blending": 2,
+      "side": 2,
+      "transparent": true,
+      "blendColor": 0,
+      "depthWrite": false
+    }
+  ],
+  "object": {
+    "uuid": "7161f590-44bb-4690-b414-b15a1a1a3fc7",
+    "type": "ParticleEmitter",
+    "layers": 1,
+    "matrix": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+    ],
+    "ps": {
+      "version": "3.0",
+      "autoDestroy": true,
+      "looping": false,
+      "prewarm": false,
+      "duration": 0.25,
+      "shape": {
+        "type": "donut",
+        "radius": 5,
+        "arc": 6.283185307179586,
+        "thickness": 0.6,
+        "donutRadius": 0.3,
+        "mode": 0,
+        "spread": 0,
+        "speed": {
+          "type": "ConstantValue",
+          "value": 1
+        }
+      },
+      "startLife": {
+        "type": "IntervalValue",
+        "a": 0.4,
+        "b": 1.2
+      },
+      "startSpeed": {
+        "type": "IntervalValue",
+        "a": 0.5,
+        "b": 3.5
+      },
+      "startRotation": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "startSize": {
+        "type": "IntervalValue",
+        "a": 0.1,
+        "b": 0.55
+      },
+      "startColor": {
+        "type": "ColorRange",
+        "a": {
+          "r": 0.72,
+          "g": 0.96,
+          "b": 1,
+          "a": 0.95
+        },
+        "b": {
+          "r": 0.18,
+          "g": 0.65,
+          "b": 1,
+          "a": 0.65
+        }
+      },
+      "emissionOverTime": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "emissionOverDistance": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "emissionBursts": [
+        {
+          "time": 0,
+          "count": {
+            "type": "ConstantValue",
+            "value": 340
+          },
+          "probability": 1,
+          "interval": 0.01,
+          "cycle": 1
+        }
+      ],
+      "onlyUsedByOther": false,
+      "instancingGeometry": "2d88031a-8298-406f-bb77-a18b8b5257a2",
+      "renderOrder": 0,
+      "renderMode": 2,
+      "rendererEmitterSettings": {},
+      "material": "44d53d32-8284-462f-8996-a33846a44434",
+      "layers": 1,
+      "startTileIndex": {
+        "type": "ConstantValue",
+        "value": 0
+      },
+      "uTileCount": 1,
+      "vTileCount": 1,
+      "blendTiles": false,
+      "softParticles": false,
+      "softFarFade": 0,
+      "softNearFade": 0,
+      "behaviors": [
+        {
+          "type": "SizeOverLife",
+          "size": {
+            "type": "PiecewiseBezier",
+            "functions": [
+              {
+                "function": {
+                  "p0": 0.75,
+                  "p1": 0.85,
+                  "p2": 0.95,
+                  "p3": 1
+                },
+                "start": 0.7
+              },
+              {
+                "function": {
+                  "p0": 1,
+                  "p1": 0.6,
+                  "p2": 0.25,
+                  "p3": 0
+                },
+                "start": 1
+              }
+            ]
+          }
+        },
+        {
+          "type": "ColorOverLife",
+          "color": {
+            "type": "Gradient",
+            "color": {
+              "type": "CLinearFunction",
+              "subType": "Color",
+              "keys": [
+                {
+                  "value": {
+                    "r": 0.72,
+                    "g": 0.96,
+                    "b": 1
+                  },
+                  "pos": 0
+                },
+                {
+                  "value": {
+                    "r": 0.22,
+                    "g": 0.72,
+                    "b": 1
+                  },
+                  "pos": 0.5
+                },
+                {
+                  "value": {
+                    "r": 0.05,
+                    "g": 0.22,
+                    "b": 0.55
+                  },
+                  "pos": 1
+                }
+              ]
+            },
+            "alpha": {
+              "type": "CLinearFunction",
+              "subType": "Number",
+              "keys": [
+                {
+                  "value": 0.95,
+                  "pos": 0
+                },
+                {
+                  "value": 0.65,
+                  "pos": 0.5
+                },
+                {
+                  "value": 0,
+                  "pos": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "RotationOverLife",
+          "angularVelocity": {
+            "type": "IntervalValue",
+            "a": -5,
+            "b": 5
+          }
+        }
+      ],
+      "worldSpace": true
+    }
+  }
+}

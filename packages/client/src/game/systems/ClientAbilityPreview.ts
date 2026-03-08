@@ -55,7 +55,6 @@ export class ClientAbilityPreview {
 
     private activeCasts: Map<number, AbilityCast> = new Map();
     // TODO: Implement preview rendering using activePreviews
-    // @ts-expect-error activePreviews is not used yet but will be for preview rendering
     private activePreviews: TelegraphPreview[] = [];
 
     /**

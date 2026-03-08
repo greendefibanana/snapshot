@@ -16,6 +16,10 @@ export const BinaryMessageType = {
     Delta: 0x07,
     ClientEvent: 0x08,
     ServerEvent: 0x09,
+    P2PMove: 0x20,
+    P2PShoot: 0x21,
+    P2PHit: 0x22,
+    P2PVfx: 0x23,
 } as const;
 
 export type BinaryMessageTypeValue = (typeof BinaryMessageType)[keyof typeof BinaryMessageType];

@@ -19,6 +19,17 @@ import { getUsernameForPublicKey, setUsernameForPublicKey, validateUsername } fr
 import { wagerMatchSeed } from '@snapshot/shared';
 import { LAMPORTS_PER_SOL, PublicKey, Transaction } from '@solana/web3.js';
 import { buildInitWagerIx, buildJoinWagerIx, findWagerPda } from '../wallet/wagerProgram';
+import {
+    CHARACTER_LOADOUT_OPTIONS,
+    WEAPON_LOADOUT_OPTIONS,
+    coercePlayerLoadoutState,
+    createDefaultLoadoutState,
+    loadPlayerLoadoutState,
+    savePlayerLoadoutState,
+    selectLoadoutSlot,
+    updateLoadoutSlot,
+    type PlayerLoadoutState,
+} from './lobby/loadouts';
 
 // =============================================================================
 // TYPES
@@ -26,6 +37,7 @@ import { buildInitWagerIx, buildJoinWagerIx, findWagerPda } from '../wallet/wage
 
 type AppState = 'wallet_check' | 'lobby' | 'playing' | 'disconnected';
 type MatchContext = { mode: string; ruleset: string };
+type SignalSoloFlowState = 'PREMATCH_LOADOUT' | 'LIVE' | 'POSTMATCH' | null;
 
 // ... (keep styles) ...
 
@@ -40,6 +52,7 @@ export const App: React.FC = () => {
     const walletAddress = publicKey?.toBase58() ?? null;
     const [appState, setAppState] = useState<AppState>('wallet_check');
     const [lobbyState, setLobbyState] = useState<LobbyState | null>(null);
+    const [socialState, setSocialState] = useState<any>(null);
     const [isPaused, setIsPaused] = useState(false);
     const [username, setUsername] = useState<string | null>(null);
     const [pendingUsername, setPendingUsername] = useState('');
@@ -50,6 +63,10 @@ export const App: React.FC = () => {
     const [wagerLoading, setWagerLoading] = useState(false);
     const [currentMatchContext, setCurrentMatchContext] = useState<MatchContext | null>(null);
     const [p2pStatus, setP2PStatus] = useState<P2PStatus>({ phase: 'idle' });
+    const [loadoutState, setLoadoutState] = useState<PlayerLoadoutState>(createDefaultLoadoutState());
+    const [loadoutsHydratedFromServer, setLoadoutsHydratedFromServer] = useState(false);
+    const [signalSoloFlowState, setSignalSoloFlowState] = useState<SignalSoloFlowState>(null);
+    const [signalSoloPendingSlotIndex, setSignalSoloPendingSlotIndex] = useState<number | null>(null);
     const lastAuthRef = useRef<{ address: string; username: string } | null>(null);
 
     // Refs
@@ -71,6 +88,18 @@ export const App: React.FC = () => {
         });
     }, [client]);
 
+    const characterLabelById = useMemo(
+        () => new Map(CHARACTER_LOADOUT_OPTIONS.map((option) => [option.id, option.label])),
+        [],
+    );
+    const weaponLabelById = useMemo(
+        () => new Map(WEAPON_LOADOUT_OPTIONS.map((option) => [option.id, option.label])),
+        [],
+    );
+    const isSignalSoloPrematch = appState === 'playing'
+        && currentMatchContext?.mode === 'signal'
+        && signalSoloFlowState === 'PREMATCH_LOADOUT';
+
     // Handle Wallet Connection
     useEffect(() => {
         if (connected && walletAddress) {
@@ -90,6 +119,26 @@ export const App: React.FC = () => {
     }, [connected, walletAddress]);
 
     useEffect(() => {
+        setLoadoutState(loadPlayerLoadoutState(walletAddress));
+        setLoadoutsHydratedFromServer(false);
+    }, [walletAddress]);
+
+    useEffect(() => {
+        savePlayerLoadoutState(walletAddress, loadoutState);
+    }, [walletAddress, loadoutState]);
+
+    useEffect(() => {
+        const selected = loadoutState.slots[loadoutState.selectedSlotIndex];
+        if (!selected) return;
+        client.setMatchLoadoutWeapons(
+            loadoutState.selectedSlotIndex,
+            selected.primaryWeaponModelId,
+            selected.secondaryWeaponModelId,
+        );
+        client.sendSelectCharacter(selected.characterModelId);
+    }, [client, loadoutState]);
+
+    useEffect(() => {
         if (connected && walletAddress && username) {
             const last = lastAuthRef.current;
             if (!last || last.address !== walletAddress || last.username !== username) {
@@ -106,6 +155,51 @@ export const App: React.FC = () => {
         }
         setAppState('wallet_check');
     }, [connected, walletAddress, username, client]);
+
+    useEffect(() => {
+        if (!publicKey || !signTransaction) {
+            client.configureSignalAuthorityWallet(null);
+            return;
+        }
+        const env = (import.meta as any).env ?? {};
+        const programId = String(env.SNAP_AUTHORITY_PROGRAM_ID ?? env.VITE_SNAP_AUTHORITY_PROGRAM_ID ?? '').trim();
+        client.configureSignalAuthorityWallet(
+            {
+                publicKey,
+                signTransaction: async (tx: Transaction) => signTransaction(tx),
+            },
+            programId ? { programId } : {},
+        );
+    }, [client, publicKey, signTransaction]);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!connected || !walletAddress || !username) return;
+        void client.getPersistedLoadouts()
+            .then((response) => {
+                if (cancelled) return;
+                if (response?.ok && response.loadouts) {
+                    setLoadoutState(coercePlayerLoadoutState(response.loadouts));
+                }
+                setLoadoutsHydratedFromServer(true);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setLoadoutsHydratedFromServer(true);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [client, connected, walletAddress, username]);
+
+    useEffect(() => {
+        if (!connected || !walletAddress || !username || !loadoutsHydratedFromServer) return;
+        const timeout = window.setTimeout(() => {
+            void client.savePersistedLoadouts(loadoutState).catch(() => undefined);
+        }, 300);
+        return () => window.clearTimeout(timeout);
+    }, [client, connected, walletAddress, username, loadoutState, loadoutsHydratedFromServer]);
 
     const handleUsernameSubmit = useCallback(() => {
         if (!walletAddress) return;
@@ -250,7 +344,7 @@ export const App: React.FC = () => {
             tx.recentBlockhash = latest.blockhash;
 
             try {
-                const sim = await connection.simulateTransaction(tx, { sigVerify: false });
+                const sim = await connection.simulateTransaction(tx);
                 if (sim.value.err) {
                     console.error('Wager simulate error', sim.value.err, sim.value.logs);
                 }
@@ -296,6 +390,8 @@ export const App: React.FC = () => {
                     break;
                 case 'disconnected':
                     setAppState('disconnected');
+                    setSignalSoloFlowState(null);
+                    setSignalSoloPendingSlotIndex(null);
                     break;
                 case 'lobby_update':
                     setLobbyState(event.state);
@@ -307,8 +403,26 @@ export const App: React.FC = () => {
                         setAppState('lobby');
                     }
                     break;
+                case 'social_update':
+                    setSocialState(event.state);
+                    break;
                 case 'match_start':
                     console.log('[App] Match started! Initializing game...');
+                    {
+                        const isSignalPrematchStart = client.getSignalSoloMatchFlowState() === 'PREMATCH_LOADOUT';
+                        if (!isSignalPrematchStart) {
+                            const selected = loadoutState.slots[loadoutState.selectedSlotIndex];
+                            if (selected) {
+                                client.selectMatchLoadout({
+                                    slotIndex: loadoutState.selectedSlotIndex,
+                                    characterModelId: selected.characterModelId,
+                                    weaponModelId: selected.primaryWeaponModelId,
+                                    primaryWeaponModelId: selected.primaryWeaponModelId,
+                                    secondaryWeaponModelId: selected.secondaryWeaponModelId,
+                                });
+                            }
+                        }
+                    }
                     setAppState('playing');
                     // Initialize Three.js game if not already done
                     if (!gameInitialized.current) {
@@ -329,9 +443,15 @@ export const App: React.FC = () => {
                     });
                     break;
                 case 'state_update':
+                    if (currentMatchContext?.mode === 'signal') {
+                        const nextFlowState = client.getSignalSoloMatchFlowState();
+                        setSignalSoloFlowState(nextFlowState);
+                    }
                     if (event.state && 'isRunning' in event.state && event.state.isRunning === false && appState === 'playing') {
                         setIsPaused(false);
                         setAppState('lobby');
+                        setSignalSoloFlowState(null);
+                        setSignalSoloPendingSlotIndex(null);
                     }
                     break;
             }
@@ -340,12 +460,12 @@ export const App: React.FC = () => {
         return () => {
             unsubscribe();
         };
-    }, [bridge, appState]);
+    }, [bridge, appState, client, currentMatchContext?.mode, loadoutState]);
 
     // Handle Escape key for pause
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.code === 'Escape' && appState === 'playing') {
+            if (e.code === 'Escape' && appState === 'playing' && !isSignalSoloPrematch) {
                 setIsPaused(prev => !prev);
                 if (!isPaused) {
                     document.exitPointerLock();
@@ -355,7 +475,7 @@ export const App: React.FC = () => {
 
         document.addEventListener('keydown', handleKeyDown);
         return () => document.removeEventListener('keydown', handleKeyDown);
-    }, [appState, isPaused]);
+    }, [appState, isPaused, isSignalSoloPrematch]);
 
     useEffect(() => {
         if (wagerLock && publicKey) {
@@ -380,18 +500,32 @@ export const App: React.FC = () => {
         bridge.sendToGame({ type: 'quit_match' });
         setIsPaused(false);
         setAppState('lobby');
+        setSignalSoloFlowState(null);
+        setSignalSoloPendingSlotIndex(null);
         // Reset game init state if we destroy the renderer (which we should todo properly)
         // gameInitialized.current = false; 
         // Note: initializeGame handles existing renderer cleanup
     }, [bridge]);
 
     const handleStartTraining = useCallback(() => {
+        const selected = loadoutState.slots[loadoutState.selectedSlotIndex];
+        if (selected) {
+            client.selectMatchLoadout({
+                slotIndex: loadoutState.selectedSlotIndex,
+                characterModelId: selected.characterModelId,
+                weaponModelId: selected.primaryWeaponModelId,
+                primaryWeaponModelId: selected.primaryWeaponModelId,
+                secondaryWeaponModelId: selected.secondaryWeaponModelId,
+            });
+        }
         client.disconnect();
         bridge.resetForLocalMode();
         setCurrentMatchContext({
             mode: 'training',
             ruleset: 'casual',
         });
+        setSignalSoloFlowState(null);
+        setSignalSoloPendingSlotIndex(null);
         bridge.updateState({
             isConnected: false,
             isGameOver: false,
@@ -414,14 +548,105 @@ export const App: React.FC = () => {
                 initializeGame(bridge);
             }, 100);
         }
-    }, [bridge, client]);
+    }, [bridge, client, loadoutState]);
 
-    const handleCreateP2PRoom = useCallback(async (): Promise<string> => {
-        return client.createP2PRoom();
+    const handleStartSignalSolo = useCallback(() => {
+        client.startSignalSoloHost();
+        setSignalSoloFlowState(client.getSignalSoloMatchFlowState());
+        setSignalSoloPendingSlotIndex(loadoutState.selectedSlotIndex);
+        setCurrentMatchContext({
+            mode: 'signal',
+            ruleset: 'casual',
+        });
+        setAppState('playing');
+        if (!gameInitialized.current) {
+            gameInitialized.current = true;
+        }
+        setTimeout(() => {
+            initializeGame(bridge);
+        }, 100);
+    }, [bridge, client, loadoutState]);
+
+    const handleConfirmSignalSoloLoadout = useCallback(() => {
+        if (signalSoloPendingSlotIndex === null) {
+            bridge.notifyGameMessage('Choose a loadout to begin.', 'warning');
+            return;
+        }
+        const selected = loadoutState.slots[signalSoloPendingSlotIndex];
+        if (!selected) {
+            bridge.notifyGameMessage('Choose a loadout to begin.', 'warning');
+            return;
+        }
+        const started = client.confirmSignalSoloPrematchLoadout({
+            slotIndex: signalSoloPendingSlotIndex,
+            characterModelId: selected.characterModelId,
+            weaponModelId: selected.primaryWeaponModelId,
+            primaryWeaponModelId: selected.primaryWeaponModelId,
+            secondaryWeaponModelId: selected.secondaryWeaponModelId,
+        });
+        if (!started) {
+            bridge.notifyGameMessage('Choose a loadout to begin.', 'warning');
+            return;
+        }
+        setLoadoutState((prev) => selectLoadoutSlot(prev, signalSoloPendingSlotIndex));
+        setSignalSoloFlowState('LIVE');
+    }, [bridge, client, loadoutState.slots, signalSoloPendingSlotIndex]);
+
+    useEffect(() => {
+        if (!isSignalSoloPrematch) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.code === 'Enter') {
+                e.preventDefault();
+                handleConfirmSignalSoloLoadout();
+                return;
+            }
+            if (e.code === 'Escape') {
+                e.preventDefault();
+                setSignalSoloPendingSlotIndex(null);
+                return;
+            }
+            const slotByCode: Record<string, number> = {
+                Digit1: 0,
+                Digit2: 1,
+                Digit3: 2,
+                Digit4: 3,
+                Digit5: 4,
+                Numpad1: 0,
+                Numpad2: 1,
+                Numpad3: 2,
+                Numpad4: 3,
+                Numpad5: 4,
+            };
+            const slotIndex = slotByCode[e.code];
+            if (slotIndex === undefined) return;
+            e.preventDefault();
+            setSignalSoloPendingSlotIndex(slotIndex);
+        };
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, [handleConfirmSignalSoloLoadout, isSignalSoloPrematch]);
+
+    const handleCreateP2PRoom = useCallback(async (mode: '1v1' | '1v1_magicblock' | '4v4' = '1v1'): Promise<string> => {
+        setCurrentMatchContext({
+            mode: mode === '1v1_magicblock' ? 'duel_er' : mode,
+            ruleset: 'casual',
+        });
+        if (mode === '4v4') {
+            return client.createTdm4v4Room();
+        }
+        return client.createP2PRoom(undefined, mode === '1v1_magicblock' ? 'duel_er' : 'duel');
     }, [client]);
 
-    const handleJoinP2PRoom = useCallback(async (code: string): Promise<void> => {
-        await client.joinP2PRoom(code);
+    const handleJoinP2PRoom = useCallback(async (code: string, mode: '1v1' | '1v1_magicblock' | '4v4' = '1v1'): Promise<void> => {
+        setCurrentMatchContext({
+            mode: mode === '1v1_magicblock' ? 'duel_er' : mode,
+            ruleset: 'casual',
+        });
+        if (mode === '4v4') {
+            await client.joinTdm4v4Room(code);
+            return;
+        }
+        await client.joinP2PRoom(code, mode === '1v1_magicblock' ? 'duel_er' : 'duel');
     }, [client]);
 
     const handleFallbackServer1v1 = useCallback(() => {
@@ -432,6 +657,50 @@ export const App: React.FC = () => {
             ruleset: 'casual',
         });
     }, [bridge, client]);
+
+    const handleSendFriendRequest = useCallback(async (toPlayerId: string): Promise<void> => {
+        await client.sendFriendRequest(toPlayerId);
+    }, [client]);
+
+    const handleAcceptFriendRequest = useCallback(async (fromPlayerId: string): Promise<void> => {
+        await client.acceptFriendRequest(fromPlayerId);
+    }, [client]);
+
+    const handleDeclineFriendRequest = useCallback(async (fromPlayerId: string): Promise<void> => {
+        await client.declineFriendRequest(fromPlayerId);
+    }, [client]);
+
+    const handleCreateParty = useCallback(async (): Promise<void> => {
+        await client.createParty();
+    }, [client]);
+
+    const handleLeaveParty = useCallback(async (): Promise<void> => {
+        await client.leaveParty();
+    }, [client]);
+
+    const handleSendPartyInvite = useCallback(async (toPlayerId: string): Promise<void> => {
+        await client.sendPartyInvite(toPlayerId);
+    }, [client]);
+
+    const handleRespondPartyInvite = useCallback(async (inviteId: string, accept: boolean): Promise<void> => {
+        await client.respondPartyInvite(inviteId, accept);
+    }, [client]);
+
+    const handleSelectLoadoutSlot = useCallback((slotIndex: number) => {
+        setLoadoutState((prev) => selectLoadoutSlot(prev, slotIndex));
+    }, []);
+
+    const handleUpdateLoadoutSlot = useCallback((
+        slotIndex: number,
+        patch: Partial<{
+            name: string;
+            characterModelId: string;
+            primaryWeaponModelId: string;
+            secondaryWeaponModelId: string;
+        }>,
+    ) => {
+        setLoadoutState((prev) => updateLoadoutSlot(prev, slotIndex, patch));
+    }, []);
 
     // =========================================================================
     // RENDER
@@ -510,11 +779,24 @@ export const App: React.FC = () => {
                     {lobbyState ? (
                         <LobbyScreen
                             lobbyState={lobbyState}
+                            socialState={socialState}
                             onStartTraining={handleStartTraining}
+                            onStartSignalSolo={handleStartSignalSolo}
                             onCreateP2PRoom={handleCreateP2PRoom}
                             onJoinP2PRoom={handleJoinP2PRoom}
                             onFallbackServer1v1={handleFallbackServer1v1}
+                            onSendFriendRequest={handleSendFriendRequest}
+                            onAcceptFriendRequest={handleAcceptFriendRequest}
+                            onDeclineFriendRequest={handleDeclineFriendRequest}
+                            onCreateParty={handleCreateParty}
+                            onLeaveParty={handleLeaveParty}
+                            onSendPartyInvite={handleSendPartyInvite}
+                            onRespondPartyInvite={handleRespondPartyInvite}
                             p2pStatus={p2pStatus}
+                            loadoutState={loadoutState}
+                            onSelectLoadoutSlot={handleSelectLoadoutSlot}
+                            onUpdateLoadoutSlot={handleUpdateLoadoutSlot}
+                            bridge={bridge}
                         />
                     ) : (
                         <div style={styles.overlay}>
@@ -522,11 +804,6 @@ export const App: React.FC = () => {
                             <ConnectWalletButton /> {/* Show button to allow disconnect */}
                         </div>
                     )}
-
-                    {/* Overlay Wallet Button in Lobby for visibility/switching */}
-                    <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 100 }}>
-                        <ConnectWalletButton />
-                    </div>
                 </div>
             )}
 
@@ -547,6 +824,50 @@ export const App: React.FC = () => {
                     matchMode={currentMatchContext?.mode}
                     matchRuleset={currentMatchContext?.ruleset}
                 />
+            )}
+            {isSignalSoloPrematch && (
+                <div style={styles.signalPrematchOverlay}>
+                    <div style={styles.signalPrematchPanel}>
+                        <h2 style={styles.signalPrematchTitle}>Select Loadout (1–5) to Start</h2>
+                        <div style={styles.signalPrematchSlots}>
+                            {loadoutState.slots.map((slot, index) => {
+                                const active = signalSoloPendingSlotIndex === index;
+                                const character = characterLabelById.get(slot.characterModelId) ?? slot.characterModelId;
+                                const primary = weaponLabelById.get(slot.primaryWeaponModelId) ?? slot.primaryWeaponModelId;
+                                const secondary = weaponLabelById.get(slot.secondaryWeaponModelId) ?? slot.secondaryWeaponModelId;
+                                return (
+                                    <button
+                                        key={slot.slotIndex}
+                                        style={{
+                                            ...styles.signalPrematchSlotButton,
+                                            ...(active ? styles.signalPrematchSlotButtonActive : {}),
+                                        }}
+                                        onClick={() => setSignalSoloPendingSlotIndex(index)}
+                                    >
+                                        <div style={styles.signalPrematchSlotHeader}>{`${index + 1}. ${slot.name}`}</div>
+                                        <div style={styles.signalPrematchSlotMeta}>{`Character: ${character}`}</div>
+                                        <div style={styles.signalPrematchSlotMeta}>{`Primary: ${primary}`}</div>
+                                        <div style={styles.signalPrematchSlotMeta}>{`Secondary: ${secondary}`}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div style={styles.signalPrematchActions}>
+                            <button
+                                style={styles.signalPrematchConfirmButton}
+                                onClick={handleConfirmSignalSoloLoadout}
+                            >
+                                Confirm (Enter)
+                            </button>
+                            <button
+                                style={styles.signalPrematchCancelButton}
+                                onClick={() => setSignalSoloPendingSlotIndex(null)}
+                            >
+                                Cancel (Esc)
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {/* Disconnected Overlay */}
@@ -753,5 +1074,82 @@ const styles: { [key: string]: React.CSSProperties } = {
         cursor: 'pointer',
         letterSpacing: '0.5px',
         textTransform: 'uppercase',
+    },
+    signalPrematchOverlay: {
+        position: 'absolute',
+        inset: 0,
+        zIndex: 60,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.76)',
+        padding: '16px',
+        color: 'white',
+        fontFamily: 'Inter, sans-serif',
+    },
+    signalPrematchPanel: {
+        width: 'min(920px, 98vw)',
+        background: 'rgba(12,16,28,0.95)',
+        border: '1px solid rgba(255,255,255,0.15)',
+        borderRadius: '12px',
+        padding: '18px',
+    },
+    signalPrematchTitle: {
+        margin: 0,
+        marginBottom: '14px',
+        fontSize: '22px',
+        fontWeight: 800,
+    },
+    signalPrematchSlots: {
+        display: 'grid',
+        gap: '10px',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    },
+    signalPrematchSlotButton: {
+        textAlign: 'left',
+        border: '1px solid rgba(255,255,255,0.18)',
+        borderRadius: '8px',
+        background: 'rgba(255,255,255,0.05)',
+        color: 'white',
+        padding: '12px',
+        cursor: 'pointer',
+    },
+    signalPrematchSlotButtonActive: {
+        border: '1px solid rgba(34,197,94,0.9)',
+        background: 'rgba(34,197,94,0.15)',
+        boxShadow: '0 0 0 1px rgba(34,197,94,0.35) inset',
+    },
+    signalPrematchSlotHeader: {
+        fontWeight: 800,
+        marginBottom: '6px',
+    },
+    signalPrematchSlotMeta: {
+        opacity: 0.88,
+        fontSize: '13px',
+        lineHeight: '1.35',
+    },
+    signalPrematchActions: {
+        display: 'flex',
+        gap: '10px',
+        marginTop: '14px',
+        justifyContent: 'flex-end',
+    },
+    signalPrematchConfirmButton: {
+        background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+        border: 'none',
+        color: '#fff',
+        fontWeight: 700,
+        borderRadius: '8px',
+        padding: '10px 14px',
+        cursor: 'pointer',
+    },
+    signalPrematchCancelButton: {
+        background: 'rgba(255,255,255,0.1)',
+        border: '1px solid rgba(255,255,255,0.2)',
+        color: '#fff',
+        fontWeight: 600,
+        borderRadius: '8px',
+        padding: '10px 14px',
+        cursor: 'pointer',
     },
 };

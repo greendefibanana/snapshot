@@ -8,7 +8,7 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import fs from 'node:fs';
 import path from 'node:path';
-import { NodeIO } from '@gltf-transform/core';
+import { Extension, NodeIO } from '@gltf-transform/core';
 import {
     type Tick,
     tick,
@@ -26,7 +26,7 @@ import {
     createEmptySnapshot,
     createEmptyInput,
 } from '@snapshot/shared/simulation';
-import { COMBAT, SMG_STATS, type ServerMessage, type GameEvent } from '@snapshot/shared';
+import { COMBAT, SMG_STATS, type ServerMessage, type GameEvent, type GameMode } from '@snapshot/shared';
 
 // =============================================================================
 // TYPES
@@ -52,6 +52,7 @@ export interface PlaceholderEntity {
     kills: number;
     deaths: number;
     weapon: {
+        weaponModelId: WeaponModelId;
         ammo: number;
         isReloading: boolean;
         reloadEndTick: Tick;
@@ -62,11 +63,110 @@ export interface PlaceholderEntity {
     lastProcessedInputSeq: number;
     characterModelId: CharacterModelId;
     inputLockUntilTick: Tick;
+    teamId: 1 | 2;
+}
+
+export interface MatchConfig {
+    mode?: GameMode;
+    targetScore?: number;
+    teamByPlayer?: Record<string, number>;
+}
+
+interface HardpointDefinition {
+    id: 'hardpoint1' | 'hardpoint2' | 'hardpoint3' | 'hardpoint4';
+    position: Vec3;
+    radius: number;
+    suddenDeath: boolean;
+}
+
+interface SignalProtocolState {
+    hardpoints: HardpointDefinition[];
+    activeHardpointIndex: number;
+    phaseStartTick: Tick;
+    matchStartTick: Tick;
+    teamSignal: [number, number];
+    controllingTeam: 1 | 2 | null;
+    contested: boolean;
+    lastScoreBroadcast: [number, number];
+    lastStateBroadcastTick: Tick;
 }
 
 export type CharacterModelId = 'assasin' | 'grizzly' | 'kodiak' | 'panda';
 const DEFAULT_CHARACTER_MODEL_ID: CharacterModelId = 'assasin';
 const VALID_CHARACTER_MODEL_IDS: ReadonlySet<string> = new Set(['assasin', 'grizzly', 'kodiak', 'panda']);
+export type WeaponModelId =
+    | 'smg1'
+    | 'sniper'
+    | 'short-gun'
+    | 'g-88-workhorse'
+    | 'kilometer'
+    | 'the-mainline'
+    | 'tungsten'
+    | 'v-3-interval';
+const DEFAULT_WEAPON_MODEL_ID: WeaponModelId = 'smg1';
+const VALID_WEAPON_MODEL_IDS: ReadonlySet<string> = new Set([
+    'smg1',
+    'sniper',
+    'short-gun',
+    'g-88-workhorse',
+    'kilometer',
+    'the-mainline',
+    'tungsten',
+    'v-3-interval',
+]);
+interface WeaponRuntimeStats {
+    damage: number;
+    range: number;
+    fireRateSeconds: number;
+    reloadSeconds: number;
+    magazineSize: number;
+    headshotMultiplier: number;
+}
+const WEAPON_STATS_BY_MODEL_ID: Record<WeaponModelId, WeaponRuntimeStats> = {
+    'smg1': { damage: 20, range: SMG_STATS.range, fireRateSeconds: SMG_STATS.fireRate, reloadSeconds: SMG_STATS.reloadTime, magazineSize: SMG_STATS.magazineSize, headshotMultiplier: SMG_STATS.headshotMultiplier },
+    'sniper': { damage: 58, range: 90, fireRateSeconds: 0.9, reloadSeconds: 2.6, magazineSize: 6, headshotMultiplier: 1.8 },
+    'short-gun': { damage: 34, range: 24, fireRateSeconds: 0.35, reloadSeconds: 2.2, magazineSize: 10, headshotMultiplier: 1.25 },
+    'g-88-workhorse': { damage: 30, range: 54, fireRateSeconds: 0.16, reloadSeconds: 2.1, magazineSize: 28, headshotMultiplier: 1.35 },
+    'kilometer': { damage: 24, range: 62, fireRateSeconds: 0.14, reloadSeconds: 1.9, magazineSize: 32, headshotMultiplier: 1.35 },
+    'the-mainline': { damage: 32, range: 56, fireRateSeconds: 0.2, reloadSeconds: 2.3, magazineSize: 24, headshotMultiplier: 1.4 },
+    'tungsten': { damage: 40, range: 46, fireRateSeconds: 0.28, reloadSeconds: 2.5, magazineSize: 18, headshotMultiplier: 1.45 },
+    'v-3-interval': { damage: 27, range: 65, fireRateSeconds: 0.18, reloadSeconds: 2.0, magazineSize: 30, headshotMultiplier: 1.4 },
+};
+const SIGNAL_PROTOCOL = {
+    targetScore: 500,
+    rotationSeconds: 90,
+    signalPerSecond: 10,
+    hardpointRadius: 8,
+    stateBroadcastIntervalTicks: 6,
+} as const;
+const DEFAULT_SIGNAL_HARDPOINTS: HardpointDefinition[] = [
+    { id: 'hardpoint1', position: { x: -24, y: 3.1, z: 0 }, radius: SIGNAL_PROTOCOL.hardpointRadius, suddenDeath: false },
+    { id: 'hardpoint2', position: { x: 0, y: 3.1, z: 0 }, radius: SIGNAL_PROTOCOL.hardpointRadius, suddenDeath: false },
+    { id: 'hardpoint3', position: { x: 24, y: 3.1, z: 0 }, radius: SIGNAL_PROTOCOL.hardpointRadius, suddenDeath: false },
+    { id: 'hardpoint4', position: { x: 0, y: 3.1, z: 18 }, radius: SIGNAL_PROTOCOL.hardpointRadius, suddenDeath: true },
+];
+const DEFAULT_TEAM_SPAWNS: Record<1 | 2, Vec3> = {
+    1: { x: -18, y: 3, z: 0 },
+    2: { x: 18, y: 3, z: 0 },
+};
+
+function resolveWeaponStats(weaponModelId: string): WeaponRuntimeStats {
+    if (VALID_WEAPON_MODEL_IDS.has(weaponModelId)) {
+        return WEAPON_STATS_BY_MODEL_ID[weaponModelId as WeaponModelId];
+    }
+    return WEAPON_STATS_BY_MODEL_ID[DEFAULT_WEAPON_MODEL_ID];
+}
+
+class KHRTextureTransformCompat extends Extension {
+    public static readonly EXTENSION_NAME = 'KHR_texture_transform';
+    public readonly extensionName = 'KHR_texture_transform';
+    public read(): this {
+        return this;
+    }
+    public write(): this {
+        return this;
+    }
+}
 
 /**
  * Simulation world state.
@@ -154,6 +254,12 @@ export class SimulationLoop {
     private pendingShots: ShotRequest[] = [];
     private pendingMessages: ServerMessage[] = [];
     private matchEnded: boolean = false;
+    private teamByPlayerId: Map<string, 1 | 2> = new Map();
+    private matchMode: GameMode = '1v1';
+    private targetScore: number = 10;
+    private hardpoints: HardpointDefinition[] = [...DEFAULT_SIGNAL_HARDPOINTS];
+    private teamSpawns: Record<1 | 2, Vec3> = { ...DEFAULT_TEAM_SPAWNS };
+    private signalState: SignalProtocolState | null = null;
 
     constructor(
         inputQueue: ServerInputQueue,
@@ -211,7 +317,7 @@ export class SimulationLoop {
             );
             console.log('SimulationLoop: Created placeholder floor');
 
-            this.loadMapColliders();
+            await this.loadMapColliders();
 
         } catch (e) {
             console.warn('SimulationLoop: Rapier not available, using simplified physics');
@@ -223,19 +329,21 @@ export class SimulationLoop {
     /**
      * Load static colliders from map JSON (server-side).
      */
-    private loadMapColliders(): void {
+    private async loadMapColliders(): Promise<void> {
         if (!this.rapier || !this.physicsWorld) return;
-        const mapPath = path.resolve(process.cwd(), '../client/public/models/Map2.glb');
+        const mapPath = path.resolve(process.cwd(), '../client/public/maps/space.glb');
         if (!fs.existsSync(mapPath)) {
             console.warn(`SimulationLoop: GLB map not found at ${mapPath}`);
             return;
         }
 
         try {
-            const io = new NodeIO();
-            const doc = io.read(mapPath);
+            const io = new NodeIO().registerExtensions([KHRTextureTransformCompat]);
+            const doc = await io.read(mapPath);
             let meshCount = 0;
             let triCount = 0;
+            const extractedHardpoints = new Map<string, Vec3>();
+            const extractedTeamSpawns = new Map<1 | 2, Vec3>();
 
             const runtimeScale = 3;
             const runtimeOffsetY = 0.1;
@@ -243,6 +351,23 @@ export class SimulationLoop {
             let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
             for (const node of doc.getRoot().listNodes()) {
+                const nodeName = (node.getName() ?? '').toLowerCase();
+                if (nodeName === 'hardpoint1' || nodeName === 'hardpoint2' || nodeName === 'hardpoint3' || nodeName === 'hardpoint4') {
+                    const world = node.getWorldMatrix();
+                    extractedHardpoints.set(nodeName, {
+                        x: (world[12] ?? 0) * runtimeScale,
+                        y: (world[13] ?? 0) * runtimeScale + runtimeOffsetY,
+                        z: (world[14] ?? 0) * runtimeScale,
+                    });
+                }
+                if (nodeName === 'spawnpoint1' || nodeName === 'spawnpoint2') {
+                    const world = node.getWorldMatrix();
+                    extractedTeamSpawns.set(nodeName === 'spawnpoint2' ? 2 : 1, {
+                        x: (world[12] ?? 0) * runtimeScale,
+                        y: (world[13] ?? 0) * runtimeScale + runtimeOffsetY,
+                        z: (world[14] ?? 0) * runtimeScale,
+                    });
+                }
                 const mesh = node.getMesh();
                 if (!mesh) continue;
                 const world = node.getWorldMatrix();
@@ -260,9 +385,9 @@ export class SimulationLoop {
                         const x = posArray[i * 3];
                         const y = posArray[i * 3 + 1];
                         const z = posArray[i * 3 + 2];
-                        let wx = world[0] * x + world[4] * y + world[8] * z + world[12];
-                        let wy = world[1] * x + world[5] * y + world[9] * z + world[13];
-                        let wz = world[2] * x + world[6] * y + world[10] * z + world[14];
+                        let wx = (world[0] ?? 0) * x + (world[4] ?? 0) * y + (world[8] ?? 0) * z + (world[12] ?? 0);
+                        let wy = (world[1] ?? 0) * x + (world[5] ?? 0) * y + (world[9] ?? 0) * z + (world[13] ?? 0);
+                        let wz = (world[2] ?? 0) * x + (world[6] ?? 0) * y + (world[10] ?? 0) * z + (world[14] ?? 0);
                         wx *= runtimeScale;
                         wy = wy * runtimeScale + runtimeOffsetY;
                         wz *= runtimeScale;
@@ -308,7 +433,7 @@ export class SimulationLoop {
                 }
             }
 
-            console.log(`SimulationLoop: Loaded Map2.glb colliders (meshes=${meshCount}, triangles=${triCount})`);
+            console.log(`SimulationLoop: Loaded map colliders (meshes=${meshCount}, triangles=${triCount})`);
             console.log(`SimulationLoop: Colliders count=${this.physicsWorld.colliders.len()}`);
             if (minX !== Infinity) {
                 this.mapBounds = {
@@ -317,17 +442,26 @@ export class SimulationLoop {
                 };
                 console.log(`SimulationLoop: Map bounds min=(${minX.toFixed(2)},${minY.toFixed(2)},${minZ.toFixed(2)}) max=(${maxX.toFixed(2)},${maxY.toFixed(2)},${maxZ.toFixed(2)})`);
             }
+            this.hardpoints = this.resolveHardpoints(extractedHardpoints);
+            this.teamSpawns = this.resolveTeamSpawns(extractedTeamSpawns);
+            console.log('SimulationLoop: Team spawns', this.teamSpawns);
         } catch (e) {
             console.warn('SimulationLoop: Failed to load GLB map colliders', e);
         }
     }
 
+    getTeamSpawn(teamId: 1 | 2): Vec3 {
+        const spawn = this.teamSpawns[teamId];
+        return spawn ? { ...spawn } : { ...DEFAULT_TEAM_SPAWNS[teamId] };
+    }
+
     /**
      * Create a placeholder player entity.
      */
-    createPlayerEntity(playerId: string, spawnPosition: Vec3): EntityId {
+    createPlayerEntity(playerId: string, spawnPosition: Vec3, teamId?: number): EntityId {
         const id = entityId(this.world.nextEntityId++);
         const groundedAtSpawn = spawnPosition.y <= this.config.groundY + 0.05;
+        const resolvedTeam = (teamId === 2 ? 2 : (this.teamByPlayerId.get(playerId) ?? 1)) as 1 | 2;
 
         const entity: PlaceholderEntity = {
             id,
@@ -345,7 +479,8 @@ export class SimulationLoop {
             kills: 0,
             deaths: 0,
             weapon: {
-                ammo: SMG_STATS.magazineSize,
+                weaponModelId: DEFAULT_WEAPON_MODEL_ID,
+                ammo: WEAPON_STATS_BY_MODEL_ID[DEFAULT_WEAPON_MODEL_ID].magazineSize,
                 isReloading: false,
                 reloadEndTick: tick(0),
                 nextFireTick: tick(0),
@@ -355,6 +490,7 @@ export class SimulationLoop {
             lastProcessedInputSeq: -1,
             characterModelId: DEFAULT_CHARACTER_MODEL_ID,
             inputLockUntilTick: tick(0),
+            teamId: resolvedTeam,
         };
 
         this.world.entities.set(id, entity);
@@ -375,6 +511,37 @@ export class SimulationLoop {
 
         console.log(`SimulationLoop: Created entity ${id} for player ${playerId}`);
         return id;
+    }
+
+    configureMatch(config: MatchConfig): void {
+        this.matchMode = config.mode ?? '1v1';
+        const fallbackTarget = this.matchMode === 'signal'
+            ? SIGNAL_PROTOCOL.targetScore
+            : this.matchMode === '4v4'
+                ? 50
+                : 10;
+        this.targetScore = Math.max(1, Math.floor(config.targetScore ?? fallbackTarget));
+        this.teamByPlayerId.clear();
+        if (config.teamByPlayer) {
+            for (const [playerId, teamRaw] of Object.entries(config.teamByPlayer)) {
+                const team = Number(teamRaw) === 2 ? 2 : 1;
+                this.teamByPlayerId.set(playerId, team);
+            }
+        }
+        this.matchEnded = false;
+        this.signalState = this.matchMode === 'signal'
+            ? {
+                hardpoints: this.hardpoints.length > 0 ? [...this.hardpoints] : [...DEFAULT_SIGNAL_HARDPOINTS],
+                activeHardpointIndex: 0,
+                phaseStartTick: this.world.tick,
+                matchStartTick: this.world.tick,
+                teamSignal: [0, 0],
+                controllingTeam: null,
+                contested: false,
+                lastScoreBroadcast: [0, 0],
+                lastStateBroadcastTick: this.world.tick,
+            }
+            : null;
     }
 
     /**
@@ -437,6 +604,7 @@ export class SimulationLoop {
         this.processReloads();
         this.processShots();
         this.processDeathsAndRespawns();
+        this.processSignalProtocol();
         this.checkMatchEnd();
 
         // 6. [Placeholder] Ability system would go here
@@ -662,9 +830,10 @@ export class SimulationLoop {
 
     private processReloads(): void {
         for (const entity of this.world.entities.values()) {
+            const weaponStats = resolveWeaponStats(entity.weapon.weaponModelId);
             if (entity.weapon.isReloading && this.world.tick >= entity.weapon.reloadEndTick) {
                 entity.weapon.isReloading = false;
-                entity.weapon.ammo = SMG_STATS.magazineSize;
+                entity.weapon.ammo = weaponStats.magazineSize;
             }
         }
     }
@@ -683,6 +852,10 @@ export class SimulationLoop {
             const shooter = this.getEntityByPlayerId(shot.playerId);
             if (!shooter || !shooter.isAlive) continue;
             if (this.isEntityInputLocked(shooter)) continue;
+            if (shot.weaponId && VALID_WEAPON_MODEL_IDS.has(shot.weaponId)) {
+                shooter.weapon.weaponModelId = shot.weaponId as WeaponModelId;
+            }
+            const weaponStats = resolveWeaponStats(shooter.weapon.weaponModelId);
 
             if (shooter.weapon.isReloading) {
                 continue;
@@ -713,15 +886,15 @@ export class SimulationLoop {
                     sourceId: shooter.id as any,
                     origin: { ...shot.origin },
                     direction: { ...dir },
-                    weapon: 'smg',
+                    weapon: shooter.weapon.weaponModelId,
                 },
                 tick: this.world.tick,
             });
 
             // Perform hit test against other players
-            const hit = this.findRayHit(shooter, shot.origin, dir, SMG_STATS.range);
+            const hit = this.findRayHit(shooter, shot.origin, dir, weaponStats.range);
             shooter.weapon.ammo -= 1;
-            shooter.weapon.nextFireTick = (this.world.tick + secondsToTicks(SMG_STATS.fireRate)) as Tick;
+            shooter.weapon.nextFireTick = (this.world.tick + secondsToTicks(weaponStats.fireRateSeconds)) as Tick;
 
             if (!hit) {
                 if (shooter.weapon.ammo <= 0) {
@@ -732,7 +905,7 @@ export class SimulationLoop {
 
             const { target, hitPoint, isHeadshot } = hit;
 
-            const damage = SMG_STATS.damage * (isHeadshot ? SMG_STATS.headshotMultiplier : 1);
+            const damage = weaponStats.damage * (isHeadshot ? weaponStats.headshotMultiplier : 1);
             this.applyDamage(shooter, target, damage, shot.shotId, hitPoint, isHeadshot);
 
             if (shooter.weapon.ammo <= 0) {
@@ -755,7 +928,8 @@ export class SimulationLoop {
             entity.health = entity.maxHealth;
             entity.position = { ...entity.spawnPosition };
             entity.velocity = { x: 0, y: 0, z: 0 };
-            entity.weapon.ammo = SMG_STATS.magazineSize;
+            const weaponStats = resolveWeaponStats(entity.weapon.weaponModelId);
+            entity.weapon.ammo = weaponStats.magazineSize;
             entity.weapon.isReloading = false;
             entity.weapon.reloadEndTick = tick(0);
             entity.weapon.nextFireTick = tick(0);
@@ -776,8 +950,9 @@ export class SimulationLoop {
 
     private startReload(entity: PlaceholderEntity): void {
         if (entity.weapon.isReloading) return;
+        const weaponStats = resolveWeaponStats(entity.weapon.weaponModelId);
         entity.weapon.isReloading = true;
-        entity.weapon.reloadEndTick = (this.world.tick + secondsToTicks(SMG_STATS.reloadTime)) as Tick;
+        entity.weapon.reloadEndTick = (this.world.tick + secondsToTicks(weaponStats.reloadSeconds)) as Tick;
     }
 
     private applyDamage(
@@ -785,11 +960,12 @@ export class SimulationLoop {
         target: PlaceholderEntity,
         damage: number,
         shotId: string,
-        hitPoint: Vec3,
-        isHeadshot: boolean
+        _hitPoint: Vec3,
+        _isHeadshot: boolean
     ): void {
         if (!target.isAlive) return;
         if (this.isEntityInputLocked(shooter) || this.isEntityInputLocked(target)) return;
+        if (shooter.teamId === target.teamId) return;
         target.health = Math.max(0, target.health - damage);
 
         this.pendingMessages.push({
@@ -824,7 +1000,7 @@ export class SimulationLoop {
             type: 'player_died',
             entityId: target.id as any,
             killerId: shooter.id as any,
-            weapon: 'smg',
+            weapon: shooter.weapon.weaponModelId,
         };
         this.pendingMessages.push({
             type: 'event',
@@ -832,23 +1008,32 @@ export class SimulationLoop {
             tick: this.world.tick,
         });
 
-        // Score update (1v1)
-        const scores: Record<string, number> = {};
-        for (const entity of this.world.entities.values()) {
-            scores[entity.playerId] = entity.kills;
+        if (this.matchMode === 'signal') {
+            return;
         }
+
+        // Score update
+        const scores = this.buildKillScoreRecord();
         this.pendingMessages.push({
             type: 'score_update',
             scores,
-            targetScore: 10,
+            targetScore: this.targetScore,
         });
 
-        if (shooter.kills >= 10) {
+        const team1Score = scores.team_1 ?? 0;
+        const team2Score = scores.team_2 ?? 0;
+        const shooterWon = this.matchMode === '4v4'
+            ? (shooter.teamId === 1 ? team1Score : team2Score) >= this.targetScore
+            : shooter.kills >= this.targetScore;
+        if (shooterWon) {
+            const winnerId = this.matchMode === '4v4'
+                ? `team_${shooter.teamId}`
+                : String(shooter.playerId);
             this.pendingMessages.push({
                 type: 'match_ended',
-                winnerId: String(shooter.playerId),
+                winnerId,
                 scores,
-                targetScore: 10,
+                targetScore: this.targetScore,
             });
             this.matchEnded = true;
         }
@@ -864,12 +1049,22 @@ export class SimulationLoop {
 
     private checkMatchEnd(): void {
         if (this.matchEnded) return;
+        if (this.matchMode === 'signal') {
+            return;
+        }
+        const scores = this.buildKillScoreRecord();
+        const team1Score = scores.team_1 ?? 0;
+        const team2Score = scores.team_2 ?? 0;
         let winnerId: string | null = null;
-        const scores: Record<string, number> = {};
-        for (const entity of this.world.entities.values()) {
-            scores[entity.playerId] = entity.kills;
-            if (entity.kills >= 10) {
-                winnerId = entity.playerId;
+        if (this.matchMode === '4v4') {
+            if (team1Score >= this.targetScore) winnerId = 'team_1';
+            if (team2Score >= this.targetScore) winnerId = 'team_2';
+        } else {
+            for (const entity of this.world.entities.values()) {
+                if (entity.kills >= this.targetScore) {
+                    winnerId = entity.playerId;
+                    break;
+                }
             }
         }
         if (!winnerId) return;
@@ -877,9 +1072,144 @@ export class SimulationLoop {
             type: 'match_ended',
             winnerId,
             scores,
-            targetScore: 10,
+            targetScore: this.targetScore,
         });
         this.matchEnded = true;
+    }
+
+    private buildKillScoreRecord(): Record<string, number> {
+        const scores: Record<string, number> = {};
+        let team1Score = 0;
+        let team2Score = 0;
+        for (const entity of this.world.entities.values()) {
+            scores[entity.playerId] = entity.kills;
+            if (entity.teamId === 1) team1Score += entity.kills;
+            if (entity.teamId === 2) team2Score += entity.kills;
+        }
+        scores.team_1 = team1Score;
+        scores.team_2 = team2Score;
+        return scores;
+    }
+
+    private buildSignalScoreRecord(signal: [number, number]): Record<string, number> {
+        const scores: Record<string, number> = {};
+        for (const entity of this.world.entities.values()) {
+            scores[entity.playerId] = entity.kills;
+        }
+        scores.team_1 = Math.round(signal[0]);
+        scores.team_2 = Math.round(signal[1]);
+        return scores;
+    }
+
+    private processSignalProtocol(): void {
+        const state = this.signalState;
+        if (!state || this.matchEnded) return;
+        const hardpoints = state.hardpoints.length > 0 ? state.hardpoints : DEFAULT_SIGNAL_HARDPOINTS;
+        const rotationTicks = secondsToTicks(SIGNAL_PROTOCOL.rotationSeconds);
+        if (this.world.tick - state.phaseStartTick >= rotationTicks) {
+            state.activeHardpointIndex = (state.activeHardpointIndex + 1) % 3;
+            state.phaseStartTick = this.world.tick;
+        }
+
+        const activeHardpoint = hardpoints[state.activeHardpointIndex] ?? hardpoints[0]!;
+        const radiusSq = activeHardpoint.radius * activeHardpoint.radius;
+        let team1OnPoint = 0;
+        let team2OnPoint = 0;
+        for (const entity of this.world.entities.values()) {
+            if (!entity.isAlive) continue;
+            const dx = entity.position.x - activeHardpoint.position.x;
+            const dz = entity.position.z - activeHardpoint.position.z;
+            if ((dx * dx + dz * dz) > radiusSq) continue;
+            if (entity.teamId === 1) {
+                team1OnPoint++;
+            } else {
+                team2OnPoint++;
+            }
+        }
+
+        state.contested = team1OnPoint > 0 && team2OnPoint > 0;
+        if (state.contested) {
+            state.controllingTeam = null;
+        } else if (team1OnPoint > 0) {
+            state.controllingTeam = 1;
+        } else if (team2OnPoint > 0) {
+            state.controllingTeam = 2;
+        } else {
+            state.controllingTeam = null;
+        }
+
+        if (state.controllingTeam !== null && !state.contested) {
+            const delta = SIGNAL_PROTOCOL.signalPerSecond * TICK_DELTA;
+            if (state.controllingTeam === 1) {
+                state.teamSignal[0] = Math.min(this.targetScore, state.teamSignal[0] + delta);
+            } else {
+                state.teamSignal[1] = Math.min(this.targetScore, state.teamSignal[1] + delta);
+            }
+        }
+
+        const rounded: [number, number] = [Math.round(state.teamSignal[0]), Math.round(state.teamSignal[1])];
+        if (rounded[0] !== state.lastScoreBroadcast[0] || rounded[1] !== state.lastScoreBroadcast[1]) {
+            state.lastScoreBroadcast = rounded;
+            this.pendingMessages.push({
+                type: 'score_update',
+                scores: this.buildSignalScoreRecord(state.teamSignal),
+                targetScore: this.targetScore,
+            });
+        }
+
+        if (this.world.tick - state.lastStateBroadcastTick >= SIGNAL_PROTOCOL.stateBroadcastIntervalTicks) {
+            state.lastStateBroadcastTick = this.world.tick;
+            this.pendingMessages.push({
+                type: 'signal_state',
+                activeHardpointId: activeHardpoint.id,
+                activeHardpointIndex: state.activeHardpointIndex,
+                hardpointPosition: { ...activeHardpoint.position },
+                hardpointRadius: activeHardpoint.radius,
+                controllingTeam: state.controllingTeam,
+                contested: state.contested,
+                teamSignal: [rounded[0], rounded[1]],
+                targetSignal: this.targetScore,
+                tick: this.world.tick,
+            });
+        }
+
+        if (rounded[0] >= this.targetScore || rounded[1] >= this.targetScore) {
+            const winnerTeam = rounded[0] >= this.targetScore ? 1 : 2;
+            this.pendingMessages.push({
+                type: 'match_ended',
+                winnerId: `team_${winnerTeam}`,
+                scores: this.buildSignalScoreRecord(state.teamSignal),
+                targetScore: this.targetScore,
+            });
+            this.matchEnded = true;
+        }
+    }
+
+    private resolveHardpoints(extractedHardpoints: Map<string, Vec3>): HardpointDefinition[] {
+        const ids: HardpointDefinition['id'][] = ['hardpoint1', 'hardpoint2', 'hardpoint3', 'hardpoint4'];
+        const out: HardpointDefinition[] = [];
+        for (const id of ids) {
+            const position = extractedHardpoints.get(id);
+            if (position) {
+                out.push({
+                    id,
+                    position: { ...position },
+                    radius: SIGNAL_PROTOCOL.hardpointRadius,
+                    suddenDeath: id === 'hardpoint4',
+                });
+            }
+        }
+        if (out.length >= 4) {
+            return out;
+        }
+        return [...DEFAULT_SIGNAL_HARDPOINTS];
+    }
+
+    private resolveTeamSpawns(extractedTeamSpawns: Map<1 | 2, Vec3>): Record<1 | 2, Vec3> {
+        return {
+            1: extractedTeamSpawns.get(1) ? { ...extractedTeamSpawns.get(1)! } : { ...DEFAULT_TEAM_SPAWNS[1] },
+            2: extractedTeamSpawns.get(2) ? { ...extractedTeamSpawns.get(2)! } : { ...DEFAULT_TEAM_SPAWNS[2] },
+        };
     }
 
     private findRayHit(
@@ -1006,7 +1336,7 @@ export class SimulationLoop {
             },
             player: {
                 playerId: entity.playerId,
-                teamId: 1, // Placeholder
+                teamId: entity.teamId,
                 isAlive: entity.isAlive,
                 characterModelId: entity.characterModelId,
                 lastProcessedInputTick: entity.lastProcessedInputTick,
@@ -1040,6 +1370,21 @@ export class SimulationLoop {
         const entity = this.getEntityByPlayerId(playerId);
         if (!entity) return;
         entity.characterModelId = characterModelId as CharacterModelId;
+    }
+
+    setWeaponModelForPlayer(playerId: string, weaponModelId: string): void {
+        if (!VALID_WEAPON_MODEL_IDS.has(weaponModelId)) return;
+        const entity = this.getEntityByPlayerId(playerId);
+        if (!entity) return;
+        entity.weapon.weaponModelId = weaponModelId as WeaponModelId;
+        const weaponStats = resolveWeaponStats(entity.weapon.weaponModelId);
+        entity.weapon.ammo = Math.min(entity.weapon.ammo, weaponStats.magazineSize);
+        if (entity.weapon.ammo <= 0) {
+            entity.weapon.ammo = weaponStats.magazineSize;
+        }
+        entity.weapon.isReloading = false;
+        entity.weapon.reloadEndTick = tick(0);
+        entity.weapon.nextFireTick = tick(0);
     }
 
     setInputLockForPlayers(playerIds: string[], durationSeconds: number): Tick {

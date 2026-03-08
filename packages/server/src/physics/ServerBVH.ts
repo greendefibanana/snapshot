@@ -2,10 +2,21 @@ import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import fs from 'node:fs';
 import path from 'node:path';
-import { NodeIO } from '@gltf-transform/core';
+import { Extension, NodeIO } from '@gltf-transform/core';
 import { mat4 } from 'gl-matrix';
 
 export type BVHBounds = { min: THREE.Vector3; max: THREE.Vector3 };
+
+class KHRTextureTransformCompat extends Extension {
+    public static readonly EXTENSION_NAME = 'KHR_texture_transform';
+    public readonly extensionName = 'KHR_texture_transform';
+    public read(): this {
+        return this;
+    }
+    public write(): this {
+        return this;
+    }
+}
 
 export class ServerBVH {
     private collider: THREE.Mesh | null = null;
@@ -13,7 +24,7 @@ export class ServerBVH {
 
     async loadMap(glbPath: string, scale = 3, offsetY = 0.1): Promise<void> {
         const data = fs.readFileSync(glbPath);
-        const io = new NodeIO();
+        const io = new NodeIO().registerExtensions([KHRTextureTransformCompat]);
         const doc = await io.readBinary(new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)));
         const positions: number[] = [];
         const indices: number[] = [];
@@ -62,7 +73,7 @@ export class ServerBVH {
         }
 
         if (positions.length === 0 || indices.length === 0) {
-            throw new Error('ServerBVH: No geometry data found in Map2.glb');
+            throw new Error(`ServerBVH: No geometry data found in ${glbPath}`);
         }
 
         const geom = new THREE.BufferGeometry();
@@ -103,5 +114,5 @@ export class ServerBVH {
 }
 
 export function mapPathFromCwd(): string {
-    return path.resolve(process.cwd(), '../client/public/models/Map2.glb');
+    return path.resolve(process.cwd(), '../client/public/maps/space.glb');
 }

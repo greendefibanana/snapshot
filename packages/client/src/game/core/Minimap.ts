@@ -7,6 +7,12 @@ interface MinimapOptions {
     zoom?: number;
 }
 
+type MarkerShape = 'dot' | 'arrow';
+type MarkerStyle = {
+    color: number;
+    shape: MarkerShape;
+};
+
 export class Minimap {
     private static readonly MARKER_LAYER = 1;
 
@@ -15,7 +21,7 @@ export class Minimap {
     private scene: THREE.Scene;
     private container: HTMLElement;
     private target = new THREE.Vector3();
-    private entityMarkers: Map<number, THREE.Object3D> = new Map();
+    private entityMarkers: Map<number, { object: THREE.Object3D; style: MarkerStyle }> = new Map();
     private playerMarker: THREE.Object3D;
 
     private sizePx: number;
@@ -96,21 +102,37 @@ export class Minimap {
         this.playerMarker.rotation.set(0, yaw, 0);
     }
 
-    addEntityMarker(entityId: number, color: number): void {
+    addEntityMarker(entityId: number, style: MarkerStyle): void {
         if (this.entityMarkers.has(entityId)) return;
-        const marker = this.createTeamMarker(color);
-        this.entityMarkers.set(entityId, marker);
+        const marker = this.createMarker(style);
+        this.entityMarkers.set(entityId, { object: marker, style });
+        this.scene.add(marker);
+    }
+
+    updateEntityMarkerStyle(entityId: number, style: MarkerStyle): void {
+        const existing = this.entityMarkers.get(entityId);
+        if (!existing) {
+            this.addEntityMarker(entityId, style);
+            return;
+        }
+        if (existing.style.color === style.color && existing.style.shape === style.shape) {
+            return;
+        }
+        this.scene.remove(existing.object);
+        this.disposeObject(existing.object);
+        const marker = this.createMarker(style);
+        this.entityMarkers.set(entityId, { object: marker, style });
         this.scene.add(marker);
     }
 
     updateEntityMarker(entityId: number, position: THREE.Vector3): void {
-        const marker = this.entityMarkers.get(entityId);
+        const marker = this.entityMarkers.get(entityId)?.object;
         if (!marker) return;
         marker.position.set(position.x, position.y + 0.06, position.z);
     }
 
     removeEntityMarker(entityId: number): void {
-        const marker = this.entityMarkers.get(entityId);
+        const marker = this.entityMarkers.get(entityId)?.object;
         if (!marker) return;
         this.scene.remove(marker);
         this.entityMarkers.delete(entityId);
@@ -125,8 +147,8 @@ export class Minimap {
         this.scene.remove(this.playerMarker);
         this.disposeObject(this.playerMarker);
         for (const marker of this.entityMarkers.values()) {
-            this.scene.remove(marker);
-            this.disposeObject(marker);
+            this.scene.remove(marker.object);
+            this.disposeObject(marker.object);
         }
         this.entityMarkers.clear();
         this.renderer.dispose();
@@ -176,7 +198,13 @@ export class Minimap {
         return group;
     }
 
-    private createTeamMarker(color: number): THREE.Mesh {
+    private createMarker(style: MarkerStyle): THREE.Object3D {
+        return style.shape === 'arrow'
+            ? this.createArrowMarker(style.color)
+            : this.createDotMarker(style.color);
+    }
+
+    private createDotMarker(color: number): THREE.Mesh {
         const geometry = new THREE.CircleGeometry(0.45, 14);
         geometry.rotateX(-Math.PI / 2);
         const material = new THREE.MeshBasicMaterial({
@@ -190,6 +218,31 @@ export class Minimap {
         mesh.layers.set(Minimap.MARKER_LAYER);
         mesh.renderOrder = 9;
         return mesh;
+    }
+
+    private createArrowMarker(color: number): THREE.Object3D {
+        const group = new THREE.Group();
+        const shape = new THREE.Shape();
+        shape.moveTo(0, 0.95);
+        shape.lineTo(-0.55, -0.45);
+        shape.lineTo(0, -0.05);
+        shape.lineTo(0.55, -0.45);
+        shape.closePath();
+
+        const geometry = new THREE.ShapeGeometry(shape);
+        geometry.rotateX(-Math.PI / 2);
+        const material = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.92,
+            depthTest: false,
+            depthWrite: false,
+        });
+        const arrow = new THREE.Mesh(geometry, material);
+        arrow.layers.set(Minimap.MARKER_LAYER);
+        arrow.renderOrder = 10;
+        group.add(arrow);
+        return group;
     }
 
     private disposeObject(object: THREE.Object3D): void {

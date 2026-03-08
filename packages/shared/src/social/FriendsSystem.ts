@@ -230,6 +230,26 @@ export class FriendList {
         return pending;
     }
 
+    /** Export all stored relations for persistence */
+    exportRelations(): FriendRelation[] {
+        const out: FriendRelation[] = [];
+        for (const [, relations] of this.relations) {
+            for (const relation of relations.values()) {
+                out.push(relation);
+            }
+        }
+        return out;
+    }
+
+    /** Restore relations from persisted state */
+    importRelations(relations: readonly FriendRelation[]): void {
+        this.relations.clear();
+        for (const relation of relations) {
+            if (!relation?.playerId || !relation?.friendId) continue;
+            this.setRelation(relation.playerId, relation.friendId, relation);
+        }
+    }
+
     // =========================================================================
     // INTERNAL
     // =========================================================================

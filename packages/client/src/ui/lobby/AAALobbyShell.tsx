@@ -72,7 +72,7 @@ export interface PartyMember {
   readonly isLeader: boolean;
 }
 
-export type GameMode = '1v1' | '4v4' | 'training';
+export type GameMode = '1v1' | '2v2' | '4v4' | 'signal' | 'signal_4v4' | 'training' | 'abilities';
 export type Ruleset = 'casual' | 'wager' | 'ranked';
 
 // =============================================================================

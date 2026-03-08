@@ -1,0 +1,250 @@
+{
+  "version": 1,
+  "savedAt": 1772988116925,
+  "friendRelations": [],
+  "partyInvites": [],
+  "nextInviteId": 1,
+  "outgoingFriendRequests": {},
+  "playerLoadoutsByWallet": {
+    "61KboWyv38393yNMC3kgcNA7SSqQtfL2bwnHbSgSy8PM": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "panda",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    },
+    "D9sPDvrTtHyt488ZKW7udtv8wP7NgWmLvCBvt8e88NR2": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "kodiak",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    },
+    "2phTwz1dpvBwB7KuLj7eAksCEkgk68B7tQc7pdx4V457": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "kodiak",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    },
+    "8QqazJqw5AKWigFW7zTpvER35N4PQAZz3rVupn267Ruq": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "kodiak",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    },
+    "4yYEzL2kJmhYWRQKTcuU2VaDgYqgkDxrF7KbDcYs8E9Z": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "kodiak",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    },
+    "G85bFVtBVgEyX6YFkbd83hyX9Mx1CwYh7zriaD5YkwjY": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "kodiak",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    },
+    "2htr2UksTP3Xc4qg1HvBMRiNY45N9nb4wTmYFGSvhaoa": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "kodiak",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    },
+    "Egs2wyMb8AyNNSCn88UwuXjFptPvy4Nhf7Cj7xjWSU6c": {
+      "selectedSlotIndex": 0,
+      "slots": [
+        {
+          "name": "Assault",
+          "characterModelId": "assasin",
+          "weaponModelId": "smg1"
+        },
+        {
+          "name": "Sniper",
+          "characterModelId": "kodiak",
+          "weaponModelId": "sniper"
+        },
+        {
+          "name": "Support",
+          "characterModelId": "panda",
+          "weaponModelId": "the-mainline"
+        },
+        {
+          "name": "Skirmish",
+          "characterModelId": "grizzly",
+          "weaponModelId": "short-gun"
+        },
+        {
+          "name": "Custom",
+          "characterModelId": "assasin",
+          "weaponModelId": "v-3-interval"
+        }
+      ]
+    }
+  }
+}

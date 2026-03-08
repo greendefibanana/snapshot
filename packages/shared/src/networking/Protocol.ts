@@ -102,6 +102,7 @@ export type ServerMessage =
     | ServerDamageAppliedMessage
     | ServerPlayerDiedMessage
     | ServerScoreUpdateMessage
+    | ServerSignalStateMessage
     | ServerMatchEndedMessage
     | ServerPongMessage
     | ServerAckMessage;
@@ -151,14 +152,27 @@ export interface ServerPlayerDiedMessage {
 export interface ServerScoreUpdateMessage {
     type: 'score_update';
     scores: Record<string, number>;
-    targetScore: 10;
+    targetScore: number;
+}
+
+export interface ServerSignalStateMessage {
+    type: 'signal_state';
+    activeHardpointId: string;
+    activeHardpointIndex: number;
+    hardpointPosition: Vector3;
+    hardpointRadius: number;
+    controllingTeam: 1 | 2 | null;
+    contested: boolean;
+    teamSignal: [number, number];
+    targetSignal: number;
+    tick: Tick;
 }
 
 export interface ServerMatchEndedMessage {
     type: 'match_ended';
     winnerId: string;
     scores: Record<string, number>;
-    targetScore: 10;
+    targetScore: number;
 }
 
 export interface ServerPongMessage {
